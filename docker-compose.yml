@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  node-portal:
+    build: .
+    container_name: yo-node-portal
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps:/app/apps
+      - ./data:/app/data
+    environment:
+      - PORT=3000
+      - APPS_PATH=/app/apps
+      - DATA_PATH=/app/data
+      - ICONS_PATH=/app/data/icons
+      - LOGS_PATH=/app/data/logs
+    restart: unless-stopped
+    tty: true
+    stdin_open: true

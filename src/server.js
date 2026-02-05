@@ -1,0 +1,329 @@
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const path = require('path');
+const fs = require('fs');
+const { exec, spawn } = require('child_process');
+
+const PORT = process.env.PORT || 3000;
+const APPS_PATH = process.env.APPS_PATH || path.join(__dirname, '..', 'apps');
+const DATA_PATH = process.env.DATA_PATH || path.join(__dirname, '..', 'data');
+const ICONS_PATH = process.env.ICONS_PATH || path.join(DATA_PATH, 'icons');
+const LOGS_PATH = process.env.LOGS_PATH || path.join(DATA_PATH, 'logs');
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+// Ensure directories exist
+[APPS_PATH, DATA_PATH, ICONS_PATH, LOGS_PATH].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve icons
+app.use('/api/icons', express.static(ICONS_PATH));
+
+// ============ API Routes ============
+
+// Apps
+app.get('/api/apps', (req, res) => {
+  const apps = [];
+  
+  if (fs.existsSync(APPS_PATH)) {
+    const entries = fs.readdirSync(APPS_PATH, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const packagePath = path.join(APPS_PATH, entry.name, 'package.json');
+        const configPath = path.join(APPS_PATH, entry.name, '.portal-config.json');
+        
+        if (fs.existsSync(packagePath)) {
+          try {
+            const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+            const configJson = fs.existsSync(configPath) 
+              ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+              : {};
+            
+            apps.push({
+              id: entry.name,
+              name: configJson.title || packageJson.name || entry.name,
+              description: configJson.description || packageJson.description || '',
+              version: packageJson.version || '',
+              icon: configJson.icon || null,
+              category: configJson.category || 'general',
+              scripts: getScripts(entry.name),
+              deployedAt: configJson.deployedAt || null,
+              lastUpdated: configJson.lastUpdated || null
+            });
+          } catch (e) {
+            console.error(`Error reading ${entry.name}:`, e.message);
+          }
+        }
+      }
+    }
+  }
+  
+  res.json({ success: true, data: apps });
+});
+
+app.get('/api/apps/:id', (req, res) => {
+  const { id } = req.params;
+  const appPath = path.join(APPS_PATH, id);
+  const packagePath = path.join(appPath, 'package.json');
+  const configPath = path.join(appPath, '.portal-config.json');
+  
+  if (!fs.existsSync(packagePath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
+  
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const configJson = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
+    
+    res.json({
+      success: true,
+      data: {
+        id,
+        name: configJson.title || packageJson.name,
+        description: configJson.description || packageJson.description || '',
+        version: packageJson.version,
+        icon: configJson.icon,
+        category: configJson.category,
+        scripts: getScripts(id),
+        hiddenScripts: configJson.hiddenScripts || [],
+        deployedAt: configJson.deployedAt,
+        lastUpdated: configJson.lastUpdated,
+        packageJson
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.put('/api/apps/:id/config', (req, res) => {
+  const { id } = req.params;
+  const { title, description, icon, category, hiddenScripts, customScripts } = req.body;
+  const appPath = path.join(APPS_PATH, id);
+  const configPath = path.join(appPath, '.portal-config.json');
+  
+  if (!fs.existsSync(appPath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
+  
+  try {
+    const config = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
+    
+    if (title !== undefined) config.title = title;
+    if (description !== undefined) config.description = description;
+    if (icon !== undefined) config.icon = icon;
+    if (category !== undefined) config.category = category;
+    if (hiddenScripts !== undefined) config.hiddenScripts = hiddenScripts;
+    if (customScripts !== undefined) config.customScripts = customScripts;
+    config.lastUpdated = new Date().toISOString();
+    
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    res.json({ success: true, data: config });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Scripts
+function getScripts(appId) {
+  const appPath = path.join(APPS_PATH, appId);
+  const packagePath = path.join(appPath, 'package.json');
+  const configPath = path.join(appPath, '.portal-config.json');
+  
+  if (!fs.existsSync(packagePath)) return [];
+  
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const configJson = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
+    
+    const hiddenScripts = configJson.hiddenScripts || [];
+    const customScripts = configJson.customScripts || {};
+    
+    const scripts = [];
+    for (const [name, command] of Object.entries(packageJson.scripts || {})) {
+      if (!hiddenScripts.includes(name)) {
+        scripts.push({
+          name,
+          command,
+          label: customScripts[name]?.label || name,
+          description: customScripts[name]?.description || '',
+          executable: true
+        });
+      }
+    }
+    return scripts;
+  } catch (e) {
+    return [];
+  }
+}
+
+app.get('/api/apps/:id/scripts', (req, res) => {
+  res.json({ success: true, data: getScripts(req.params.id) });
+});
+
+app.post('/api/apps/:id/script/:script', (req, res) => {
+  const { id, script } = req.params;
+  const appPath = path.join(APPS_PATH, id);
+  
+  // Execute script
+  const proc = spawn('npm', ['run', script], {
+    cwd: appPath,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env }
+  });
+  
+  let output = '';
+  proc.stdout.on('data', (data) => {
+    const text = data.toString();
+    output += text;
+    broadcastLog(id, { type: 'stdout', data: text });
+  });
+  
+  proc.stderr.on('data', (data) => {
+    const text = data.toString();
+    output += text;
+    broadcastLog(id, { type: 'stderr', data: text });
+  });
+  
+  proc.on('close', (code) => {
+    broadcastLog(id, { type: 'exit', data: code.toString() });
+    res.json({ success: true, data: { code, output } });
+  });
+  
+  proc.on('error', (err) => {
+    res.status(500).json({ success: false, error: err.message });
+  });
+});
+
+// Deployment
+app.post('/api/deploy/git', (req, res) => {
+  const { repoUrl, branch = 'main', targetPath, installDeps = true } = req.body;
+  
+  if (!repoUrl) {
+    return res.status(400).json({ success: false, error: 'repoUrl required' });
+  }
+  
+  const id = targetPath || repoUrl.split('/').pop().replace('.git', '');
+  const appPath = path.join(APPS_PATH, id);
+  
+  // Clone
+  exec(`git clone ${repoUrl} ${appPath} ${branch ? `-b ${branch}` : ''}`, (err) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    
+    // Install deps if needed
+    if (installDeps) {
+      exec('npm install', { cwd: appPath }, (err) => {
+        if (err) {
+          console.error('npm install failed:', err.message);
+        }
+        res.json({ success: true, data: { id, path: appPath } });
+      });
+    } else {
+      res.json({ success: true, data: { id, path: appPath } });
+    }
+  });
+});
+
+app.post('/api/deploy/zip', (req, res) => {
+  // Simplified - would need multipart handling
+  res.status(501).json({ success: false, error: 'ZIP deployment not implemented yet' });
+});
+
+// Icons
+app.get('/api/icons', (req, res) => {
+  const icons = [];
+  if (fs.existsSync(ICONS_PATH)) {
+    for (const file of fs.readdirSync(ICONS_PATH)) {
+      const stats = fs.statSync(path.join(ICONS_PATH, file));
+      icons.push({
+        filename: file,
+        size: stats.size,
+        uploadedAt: stats.mtime
+      });
+    }
+  }
+  res.json({ success: true, data: icons });
+});
+
+app.post('/api/icons', (req, res) => {
+  // Simplified - would need file upload handling
+  res.status(501).json({ success: false, error: 'Icon upload not implemented yet' });
+});
+
+// Logs WebSocket
+const wsClients = new Map();
+
+function broadcastLog(appId, message) {
+  const clients = wsClients.get(appId) || [];
+  clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(message));
+    }
+  });
+}
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const appId = url.searchParams.get('app');
+  
+  if (appId) {
+    if (!wsClients.has(appId)) wsClients.set(appId, []);
+    wsClients.get(appId).push(ws);
+    
+    ws.on('close', () => {
+      const clients = wsClients.get(appId);
+      const idx = clients.indexOf(ws);
+      if (idx !== -1) clients.splice(idx, 1);
+    });
+  }
+});
+
+// Health
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// SPA fallback
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ success: false, error: err.message });
+});
+
+server.listen(PORT, () => {
+  console.log(`🌙 yo-node-portal running on http://localhost:${PORT}`);
+  console.log(`Apps path: ${APPS_PATH}`);
+});

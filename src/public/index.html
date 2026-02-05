@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yo-node-portal</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-title">
+        <span class="logo">🌙</span>
+        <h1>yo-node-portal</h1>
+      </div>
+      <button class="btn btn-primary" @click="showDeployModal = true">
+        🚀 Desplegar
+      </button>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      
+      <!-- Search -->
+      <div class="search-bar">
+        <input 
+          type="text" 
+          v-model="searchQuery" 
+          placeholder="🔍 Buscar aplicaciones..." 
+          class="search-input"
+        >
+      </div>
+
+      <!-- Apps Grid -->
+      <div class="apps-grid" v-if="filteredApps.length > 0">
+        <div 
+          v-for="app in filteredApps" 
+          :key="app.id" 
+          class="app-tile"
+          :class="{ 'running': isRunning(app.id) }"
+        >
+          <div class="tile-header">
+            <span class="app-icon">{{ app.icon || '📦' }}</span>
+            <h3>{{ app.name }}</h3>
+            <span class="status-badge" :class="isRunning(app.id) ? 'online' : 'offline'">
+              {{ isRunning(app.id) ? '🟢' : '🔴' }}
+            </span>
+          </div>
+          
+          <div class="tile-body">
+            <p class="description">{{ app.description || 'Sin descripción' }}</p>
+            <p class="version" v-if="app.version">v{{ app.version }}</p>
+          </div>
+          
+          <div class="tile-scripts">
+            <button 
+              v-for="script in app.scripts.slice(0, 3)" 
+              :key="script.name"
+              class="script-btn"
+              @click="runScript(app, script.name)"
+              :disabled="runningScripts.has(app.id + ':' + script.name)"
+            >
+              {{ script.label || script.name }}
+            </button>
+            <span v-if="app.scripts.length > 3" class="more-scripts">
+              +{{ app.scripts.length - 3 }} más
+            </span>
+          </div>
+          
+          <div class="tile-actions">
+            <button class="btn-icon" @click="openConfig(app)" title="Configurar">⚙️</button>
+            <button class="btn-icon" @click="openLogs(app)" title="Logs">📝</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty State -->
+      <div v-else class="empty-state">
+        <p>No hay aplicaciones desplegadas.</p>
+        <button class="btn btn-primary" @click="showDeployModal = true">
+          🚀 Desplegar primera aplicación
+        </button>
+      </div>
+
+    </main>
+
+    <!-- Deploy Modal -->
+    <div class="modal-overlay" v-if="showDeployModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🚀 Desplegar Aplicación</h3>
+          <button class="btn-icon" @click="showDeployModal = false">✕</button>
+        </div>
+        <form @submit.prevent="deployApp" class="modal-body">
+          <div class="form-group">
+            <label>URL del repositorio Git *</label>
+            <input type="url" v-model="deployForm.repoUrl" required placeholder="https://github.com/user/repo.git">
+          </div>
+          <div class="form-group">
+            <label>Rama (opcional)</label>
+            <input type="text" v-model="deployForm.branch" placeholder="main">
+          </div>
+          <div class="form-group">
+            <label>Nombre de la carpeta</label>
+            <input type="text" v-model="deployForm.targetPath" placeholder="Se usará el nombre del repositorio">
+          </div>
+          <div class="form-group checkbox">
+            <label>
+              <input type="checkbox" v-model="deployForm.installDeps">
+              Instalar dependencias automáticamente
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn" @click="showDeployModal = false">Cancelar</button>
+            <button type="submit" class="btn btn-primary" :disabled="deploying">
+              {{ deploying ? '⏳ Clonando...' : '🚀 Desplegar' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Config Modal -->
+    <div class="modal-overlay" v-if="configApp">
+      <div class="modal modal-lg">
+        <div class="modal-header">
+          <h3>⚙️ {{ configApp.name }}</h3>
+          <button class="btn-icon" @click="configApp = null">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="config-section">
+            <h4>Información</h4>
+            <div class="form-group">
+              <label>Título</label>
+              <input type="text" v-model="configForm.title">
+            </div>
+            <div class="form-group">
+              <label>Descripción</label>
+              <textarea v-model="configForm.description" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Categoría</label>
+              <input type="text" v-model="configForm.category">
+            </div>
+          </div>
+          
+          <div class="config-section">
+            <h4>Scripts</h4>
+            <div class="scripts-list">
+              <div v-for="script in configApp.scripts" :key="script.name" class="script-item">
+                <span class="script-name">{{ script.name }}</span>
+                <label class="script-toggle">
+                  <input type="checkbox" v-model="configForm.visibleScripts" :value="script.name">
+                  Visible
+                </label>
+              </div>
+              <div v-for="script in hiddenScripts" :key="script" class="script-item hidden">
+                <span class="script-name">{{ script }}</span>
+                <button type="button" class="btn btn-small" @click="showScript(configApp, script)">
+                  Mostrar
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="modal-actions">
+            <button type="button" class="btn" @click="configApp = null">Cancelar</button>
+            <button type="button" class="btn btn-primary" @click="saveConfig" :disabled="saving">
+              {{ saving ? '⏳ Guardando...' : '💾 Guardar' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs Modal -->
+    <div class="modal-overlay" v-if="logsApp">
+      <div class="modal modal-lg">
+        <div class="modal-header">
+          <h3>📝 {{ logsApp.name }} - Logs</h3>
+          <button class="btn-icon" @click="closeLogs">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="logs-container" ref="logsContainer">
+            <div v-for="(log, i) in logs" :key="i" class="log-line" :class="log.type">
+              {{ log.data }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notifications -->
+    <div class="notifications">
+      <div 
+        v-for="notification in notifications" 
+        :key="notification.id"
+        :class="['notification', notification.type]"
+      >
+        {{ notification.message }}
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

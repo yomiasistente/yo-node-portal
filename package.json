@@ -1,0 +1,17 @@
+{
+  "name": "yo-node-portal",
+  "version": "1.0.0",
+  "description": "Portal for managing Node.js applications",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "better-sqlite3": "^9.4.3",
+    "ws": "^8.16.0",
+    "adm-zip": "^0.5.10",
+    "uuid": "^9.0.1"
+  }
+}
