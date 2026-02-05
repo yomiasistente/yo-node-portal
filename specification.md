@@ -1,6 +1,6 @@
 # yo-node-portal Specification
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** February 2026  
 **Status:** Draft
 
@@ -9,7 +9,7 @@
 ## 1. Overview
 
 ### 1.1 Purpose
-Web portal for managing and hosting Node.js applications and scripts deployed via Docker. Provides a unified interface to monitor, execute, configure, and manage multiple Node.js projects.
+Web portal for managing and hosting Node.js applications and scripts within the same container as the portal itself. Provides a unified interface to discover, deploy, execute, configure, and monitor multiple Node.js projects.
 
 ### 1.2 Architecture
 
@@ -23,19 +23,20 @@ Web portal for managing and hosting Node.js applications and scripts deployed vi
 │              yo-node-portal Container                      │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │  - Express Server (API + Static files)              │  │
-│  │  - Docker SDK (container management)                │  │
+│  │  - Process Manager (child_process)                  │  │
 │  │  - File Manager (JSON config editing)              │  │
-│  │  - Process Manager (PM2-style operations)          │  │
-│  │  - Log Aggregator                                   │  │
+│  │  - Git Client (clone repositories)                 │  │
+│  │  - ZIP Handler (extract uploaded apps)             │  │
+│  │  - Log Aggregator (WebSocket streaming)            │  │
 │  └─────────────────────────────────────────────────────┘  │
-└─────────────────────────┬─────────────────────────────────┘
-                          │
-┌─────────────────────────▼─────────────────────────────────┐
-│              Docker Daemon                                 │
-│  ┌───────────────────────┐  ┌───────────────────────┐   │
-│  │  yo-node-portal      │  │  Managed Containers    │   │
-│  │  (itself)            │  │  (your Node.js apps)  │   │
-│  └───────────────────────┘  └───────────────────────┘   │
+│                        │                                   │
+│  ┌─────────────────────▼────────────────────────────────┐  │
+│  │              apps/ Directory                         │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │  │
+│  │  │ my-wol-app  │  │ my-scripts  │  │ api-gateway │  │  │
+│  │  │ (cloned)    │  │ (zip)       │  │ (manual)    │  │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  │  │
+│  └─────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,10 +46,11 @@ Web portal for managing and hosting Node.js applications and scripts deployed vi
 |-------|------------|
 | Backend | Node.js + Express |
 | Frontend | Vue.js 3 (CDN, no build) |
-| Container Runtime | Docker SDK for Node.js |
-| File Management | fs/promises (local configs) |
-| Database | SQLite (optional, for logs/history) |
-| Terminal | xterm.js (optional, for terminal access) |
+| Process Management | child_process module |
+| Git Integration | simple-git or child_process git CLI |
+| ZIP Handling | adm-zip or yauzl |
+| Database | SQLite (optional, for deployment history/logs) |
+| Logging | Winston + WebSocket |
 
 ---
 
@@ -61,10 +63,23 @@ Web portal for managing and hosting Node.js applications and scripts deployed vi
 | FR-AR-01 | Auto-discover Node.js applications via `package.json` | Must Have |
 | FR-AR-02 | Parse scripts section from `package.json` | Must Have |
 | FR-AR-03 | Extract metadata (name, description, author) from `package.json` | Must Have |
-| FR-AR-04 | Manual add/remove applications | Could Have |
-| FR-AR-05 | Application categories/tags | Could Have |
+| FR-AR-04 | Configure which scripts are visible/executable | Must Have |
+| FR-AR-05 | Hide sensitive scripts (postinstall, etc.) | Must Have |
+| FR-AR-06 | Manual add/remove applications | Could Have |
+| FR-AR-07 | Application categories/tags | Could Have |
 
-### 2.2 Application Management
+### 2.2 Deployment
+
+| ID | Description | Priority |
+|----|-------------|----------|
+| FR-DP-01 | Deploy by cloning Git repository | Must Have |
+| FR-DP-02 | Deploy by uploading ZIP file | Must Have |
+| FR-DP-03 | Validate package.json after deployment | Must Have |
+| FR-DP-04 | Auto-install dependencies after deployment | Must Have |
+| FR-DP-05 | Delete applications | Must Have |
+| FR-DP-06 | View deployment history | Could Have |
+
+### 2.3 Application Management
 
 | ID | Description | Priority |
 |----|-------------|----------|
@@ -72,19 +87,20 @@ Web portal for managing and hosting Node.js applications and scripts deployed vi
 | FR-AM-02 | Start/stop Node.js processes | Must Have |
 | FR-AM-03 | View running processes status | Must Have |
 | FR-AM-04 | Process health monitoring | Must Have |
-| FR-AM-05 | Restart applications | Must Have |
+| FR-AM-05 | Restart applications/scripts | Must Have |
+| FR-AM-06 | View resource usage (CPU, Memory) | Should Have |
 
-### 2.3 Execution & Logs
+### 2.4 Execution & Logs
 
 | ID | Description | Priority |
 |----|-------------|----------|
 | FR-EL-01 | Execute script and capture output | Must Have |
 | FR-EL-02 | Real-time log streaming (WebSocket) | Must Have |
 | FR-EL-03 | Execution history | Could Have |
-| FR-EL-04 | Log file viewer | Could Have |
+| FR-EL-04 | Per-app log files | Could Have |
 | FR-EL-05 | Download logs | Could Have |
 
-### 2.4 Configuration Editor
+### 2.5 Configuration Editor
 
 | ID | Description | Priority |
 |----|-------------|----------|
@@ -94,7 +110,7 @@ Web portal for managing and hosting Node.js applications and scripts deployed vi
 | FR-CE-04 | JSON schema validation | Could Have |
 | FR-CE-05 | Config file backup/restore | Could Have |
 
-### 2.5 Dashboard
+### 2.6 Dashboard
 
 | ID | Description | Priority |
 |----|-------------|----------|
@@ -108,18 +124,17 @@ Web portal for managing and hosting Node.js applications and scripts deployed vi
 
 ## 3. Application Structure
 
-### 3.1 Discovered Applications
-
-Each managed application should have a structure like:
+### 3.1 Apps Directory
 
 ```
 apps/
-├── my-wol-app/
-│   ├── package.json          # Source of truth
+├── my-wol-app/                  # Deployed application
+│   ├── package.json             # Source of truth
 │   ├── src/
 │   ├── data/
-│   └── .env                  # Environment variables
-├── my-script-collection/
+│   ├── .env                     # Environment variables
+│   └── logs/                    # App-specific logs
+├── my-scripts/
 │   ├── package.json
 │   └── scripts/
 └── api-gateway/
@@ -142,9 +157,27 @@ apps/
   "portal": {
     "enabled": true,
     "category": "api",
-    "port": 3000,
-    "healthCheck": "/health"
+    "hiddenScripts": ["postinstall", "prepublish"],
+    "scripts": {
+      "start": { "label": "Iniciar servidor", "description": "Inicia el servidor en producción" },
+      "dev": { "label": "Desarrollo", "description": "Modo desarrollo con nodemon" },
+      "test": { "label": "Tests", "description": "Ejecuta los tests unitarios" }
+    }
   }
+}
+```
+
+### 3.3 Portal Configuration Schema
+
+```json
+{
+  "apps": [
+    {
+      "id": "my-wol-app",
+      "path": "./apps/my-wol-app",
+      "hiddenScripts": ["postinstall"]
+    }
+  ]
 }
 ```
 
@@ -158,13 +191,45 @@ apps/
 |--------|----------|-------------|
 | GET | `/api/apps` | List all applications |
 | GET | `/api/apps/:id` | Get application details |
+| GET | `/api/apps/:id/package` | Get package.json content |
 | POST | `/api/apps/:id/script/:script` | Execute npm script |
-| POST | `/api/apps/:id/start` | Start application |
+| POST | `/api/apps/:id/start` | Start application (long-running) |
 | POST | `/api/apps/:id/stop` | Stop application |
 | POST | `/api/apps/:id/restart` | Restart application |
 | GET | `/api/apps/:id/status` | Get running status |
+| DELETE | `/api/apps/:id` | Delete application |
 
-### 4.2 Logs
+### 4.2 Deployment
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/deploy/git` | Clone from Git repository |
+| POST | `/api/deploy/zip` | Deploy from ZIP file upload |
+| POST | `/api/deploy/manual` | Register existing directory |
+| GET | `/api/deploy/history` | View deployment history |
+
+#### Git Deploy Payload
+```json
+{
+  "repoUrl": "https://github.com/user/repo.git",
+  "branch": "main",
+  "targetPath": "./apps/my-new-app",
+  "installDeps": true
+}
+```
+
+#### ZIP Deploy
+- File upload via multipart/form-data
+- Extracts to apps directory
+
+### 4.3 Scripts Configuration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/apps/:id/scripts` | Get list of visible scripts |
+| PUT | `/api/apps/:id/scripts/:script` | Update script visibility/settings |
+
+### 4.4 Logs
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -172,7 +237,7 @@ apps/
 | GET | `/api/apps/:id/logs/stream` | WebSocket stream |
 | GET | `/api/apps/:id/logs/download` | Download log file |
 
-### 4.3 Configuration
+### 4.5 Configuration
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -180,7 +245,7 @@ apps/
 | GET | `/api/apps/:id/config/:file` | Read config file |
 | PUT | `/api/apps/:id/config/:file` | Write config file |
 
-### 4.4 System
+### 4.6 System
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -198,14 +263,36 @@ apps/
 │  🌙 yo-node-portal                            [⚙️ Admin] │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ┌─ Dashboard ───┐  ┌─ Aplicaciones ───┐  ┌─ Sistema ───┐  │
-│  │    📊        │  │    📦            │  │    ⚙️       │  │
-│  │  ACTIVO      │  │   INACTIVO       │  │   INACTIVO  │  │
+│  ┌─ Dashboard ───┐  ┌─ Aplicaciones ───┐  ┌─ Desplegar ─┐ │
+│  │    📊        │  │    📦            │  │    🚀        │ │
+│  │  ACTIVO      │  │   INACTIVO       │  │   ACTIVO     │ │
 │  └───────────────┘  └───────────────────┘  └──────────────┘│
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Application Tile
+### 5.2 Dashboard View
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🌙 yo-node-portal                               [+ Desplegar]│
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  📊 Resumen                                                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ 📦 Apps: 5  🟢 Running: 2  🔴 Stopped: 3          │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+│  📦 Aplicaciones                                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ☑️ │ my-wol-app        │ 🟢 Running   │ [▶️][⏸️][🔄]│    │
+│  │ ☑️ │ my-scripts        │ 🔴 Stopped   │ [▶️][⏸️][🔄]│    │
+│  │ ☑️ │ api-gateway       │ 🟡 Error      │ [▶️][⏸️][🔄]│    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 5.3 Application Tile
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -214,26 +301,57 @@ apps/
 │  │  📦 API Service                │  📊 CPU: 12%           │
 │  │  v1.2.0                       │  💾 MEM: 256MB         │
 │  │                                │                       │
-│  │  🚀 start    [▶️] [⏸️] [🔄]   │  📝 Logs     [⚙️]    │
+│  │  🚀 Scripts: start, dev       │  📝 Logs     [⚙️]    │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.3 Script Actions
+### 5.4 Script Actions
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  🚀 Scripts Disponibles                                   │
+│  🚀 Scripts Disponibles - my-wol-app                      │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │ [▶️ start]     Iniciar servidor (node src/server) │    │
-│  │ [▶️ dev]       Modo desarrollo (nodemon)          │    │
-│  │ [▶️ test]      Ejecutar tests                     │    │
-│  │ [▶️ build]     Compilar producción                │    │
+│  │ [▶️] Iniciar servidor    node src/server.js         │    │
+│  │ [▶️] Desarrollo          nodemon src/server.js      │    │
+│  │ [⚙️] Tests              jest                        │    │
+│  │ 🚫 postinstall          (hidden - no ejecutable)    │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.4 Log Viewer
+### 5.5 Deploy Modal
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  🚀 Desplegar Nueva Aplicación                    [✕ Cerrar] │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌─ Método de Despliegue ──────────────────────────────────┐  │
+│  │ ○ Git Repository    ○ Subir ZIP    ○ Carpeta Existente  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  ┌─ Git Repository ────────────────────────────────────────┐  │
+│  │ URL del repositorio *                                    │  │
+│  │ ┌─────────────────────────────────────────────────────┐  │  │
+│  │ └─────────────────────────────────────────────────────┘  │  │
+│  │ Rama: [main           ]                                │  │
+│  │ Carpeta destino: [my-app        ]                     │  │
+│  │ ☐ Instalar dependencias automáticamente              │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  ┌─ Subir ZIP ────────────────────────────────────────────┐  │
+│  │ ┌─────────────────────────────────────────────────────┐  │  │
+│  │ │ Arrastra aquí un archivo ZIP o haz clic para        │  │  │
+│  │ │ seleccionar                                          │  │  │
+│  │ └─────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                               │
+│                                    [Cancelar]  [🚀 Desplegar] │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### 5.6 Log Viewer
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -242,13 +360,13 @@ apps/
 │  2026-02-05 10:15:32 [INFO] Server started on port 3000    │
 │  2026-02-05 10:15:33 [INFO] Connected to database         │
 │  2026-02-05 10:16:01 [INFO] New request: GET /api/devices │
-│  2026-02-05 10:16:02 [INFO] Response: 200 OK (45ms)        │
-│  2026-02-05 10:18:45 [WARN] Slow query detected (>100ms)  │
-│  2026-02-05 10:20:11 [ERROR] Connection timeout           │
+│  2026-02-05 10:16:02 [INFO] Response: 200 OK (45ms)      │
+│  2026-02-05 10:18:45 [WARN] Slow query detected (>100ms) │
+│  2026-02-05 10:20:11 [ERROR] Connection timeout          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.5 Config Editor
+### 5.7 Config Editor
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -268,59 +386,203 @@ apps/
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### 5.8 Script Configuration Modal
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│  ⚙️ Configurar Scripts - my-wol-app                [✕ Cerrar] │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Scripts Definidos en package.json:                           │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ Script       │ Visible │ Etiqueta                    │    │
+│  ├─────────────┼─────────┼─────────────────────────────┤    │
+│  │ start       │ ☑      │ Iniciar servidor            │    │
+│  │ dev         │ ☑      │ Modo desarrollo             │    │
+│  │ test        │ ☑      │ Ejecutar tests              │    │
+│  │ build       │ ☐      │ Compilar producción         │    │
+│  │ postinstall │ ☐      │ (interno)                   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                               │
+│  Scripts Personalizados:                                       │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ [+ Añadir script personalizado]                     │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                               │
+│                                    [Cancelar]  [💾 Guardar] │
+└───────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 6. Implementation Details
 
 ### 6.1 Process Management
 
-#### Option A: PM2-style (recommended)
-- Use PM2 inside each application container
-- Portal communicates via PM2 CLI or API
-
-#### Option B: Direct process spawning
-- Spawn processes directly from Node.js
-- Manage lifecycle with child_process module
-- Less isolated, simpler setup
-
-#### Option C: Docker Container Management
-- Each app runs in its own container
-- Portal uses Docker SDK to manage
-- Best isolation, more complex
-
-**Recommendation:** Option C with Docker SDK for production-grade isolation.
-
-### 6.2 Log Streaming
+Processes run in the SAME container using Node.js `child_process`:
 
 ```javascript
-// WebSocket endpoint for log streaming
-app.ws('/api/apps/:id/logs/stream', (ws, req) => {
-  const { exec } = require('child_process');
-  const proc = exec(`tail -f ${appPath}/logs/*.log`);
+// Execute script and capture output
+async function executeScript(appPath, scriptName) {
+  const { spawn } = require('child_process');
+  
+  return new Promise((resolve, reject) => {
+    const proc = spawn('npm', ['run', scriptName], {
+      cwd: appPath,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    let output = '';
+    proc.stdout.on('data', (data) => {
+      output += data.toString();
+      // Emit to WebSocket for real-time viewing
+    });
+    
+    proc.stderr.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    proc.on('close', (code) => {
+      resolve({ code, output });
+    });
+  });
+}
+
+// Long-running process management
+const runningProcesses = new Map();
+
+async function startApp(appPath) {
+  const proc = spawn('npm', ['run', 'start'], {
+    cwd: appPath,
+    stdio: 'pipe',
+    detached: true
+  });
+  
+  const pid = proc.pid;
+  runningProcesses.set(pid, { proc, appPath, startedAt: new Date() });
   
   proc.stdout.on('data', (data) => {
-    ws.send(data);
+    // Emit to WebSocket
+  });
+  
+  return pid;
+}
+
+function stopApp(pid) {
+  const procInfo = runningProcesses.get(pid);
+  if (procInfo) {
+    process.kill(-pid);  // Kill process tree
+    runningProcesses.delete(pid);
+  }
+}
+```
+
+### 6.2 Git Deployment
+
+```javascript
+const simpleGit = require('simple-git');
+
+async function deployFromGit(repoUrl, branch, targetPath) {
+  const git = simpleGit();
+  
+  // Clone repository
+  await git.clone(repoUrl, targetPath);
+  
+  // Checkout specific branch
+  const repo = simpleGit(targetPath);
+  await repo.checkout(branch);
+  
+  // Install dependencies
+  const { exec } = require('child_process');
+  await new Promise((resolve, reject) => {
+    const proc = exec('npm install', { cwd: targetPath });
+    proc.on('close', resolve);
+    proc.on('error', reject);
+  });
+  
+  return { success: true, path: targetPath };
+}
+```
+
+### 6.3 ZIP Deployment
+
+```javascript
+const admZip = require('adm-zip');
+const fs = require('fs');
+const path = require('path');
+
+async function deployFromZip(zipBuffer, targetPath) {
+  const zip = new admZip(zipBuffer);
+  
+  // Extract to target directory
+  zip.extractAllTo(targetPath, true);
+  
+  // Validate package.json exists
+  const packagePath = path.join(targetPath, 'package.json');
+  if (!fs.existsSync(packagePath)) {
+    throw new Error('Invalid ZIP: package.json not found');
+  }
+  
+  return { success: true, path: targetPath };
+}
+```
+
+### 6.4 Log Streaming
+
+```javascript
+// In-memory log buffer per app
+const appLogs = new Map();
+
+// WebSocket endpoint for log streaming
+app.ws('/api/apps/:id/logs/stream', (ws, req) => {
+  const appId = req.params.id;
+  
+  // Send recent logs
+  const logs = appLogs.get(appId) || [];
+  ws.send(JSON.stringify({ type: 'history', logs }));
+  
+  // Subscribe to new logs
+  const subscription = subscribeToLogs(appId, (log) => {
+    ws.send(JSON.stringify({ type: 'log', data: log }));
   });
   
   ws.on('close', () => {
-    proc.kill();
+    unsubscribeFromLogs(appId, subscription);
   });
 });
 ```
 
-### 6.3 Configuration Editing
+### 6.5 Script Configuration
 
 ```javascript
-// Safe JSON write with backup
-async function updateConfig(filePath, newContent) {
-  // Create backup
-  await fs.copyFile(filePath, `${filePath}.backup`);
+// Merge package.json scripts with portal configuration
+function getVisibleScripts(appPath) {
+  const packageJson = require(path.join(appPath, 'package.json'));
+  const portalConfig = loadPortalConfig(appPath);
   
-  // Validate JSON
-  JSON.parse(newContent);
+  const allScripts = Object.keys(packageJson.scripts || {});
+  const hiddenScripts = portalConfig.hiddenScripts || [];
   
-  // Write new content
-  await fs.writeFile(filePath, newContent);
+  return allScripts
+    .filter(script => !hiddenScripts.includes(script))
+    .map(script => ({
+      name: script,
+      command: packageJson.scripts[script],
+      label: portalConfig.scripts?.[script]?.label || script,
+      description: portalConfig.scripts?.[script]?.description || '',
+      executable: true
+    }));
+}
+
+function updateScriptConfig(appPath, scriptName, config) {
+  const configPath = path.join(appPath, '.portal-config.json');
+  const config = loadOrCreateConfig(configPath);
+  
+  if (!config.scripts) config.scripts = {};
+  config.scripts[scriptName] = config;
+  
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 ```
 
@@ -335,18 +597,20 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dependencies
+# Install git for git clone deployments
+RUN apk add --no-cache git
+
+# Copy package files
 COPY package*.json ./
+
+# Install dependencies
 RUN npm ci --production
 
-# Copy app
+# Copy application
 COPY . .
 
 # Create apps volume mount point
-RUN mkdir -p /apps /data/logs && chmod 777 /data/logs
-
-# Install Docker CLI (for container management)
-RUN apk add --no-cache docker-cli
+RUN mkdir -p /app/apps /app/data/logs && chmod 777 /app/data/logs
 
 EXPOSE 3000
 
@@ -365,13 +629,15 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./apps:/app/apps:ro
+      - ./apps:/app/apps
       - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PORT=3000
       - APPS_PATH=/app/apps
+      - LOGS_PATH=/app/data/logs
     restart: unless-stopped
+    tty: true
+    stdin_open: true
 ```
 
 ---
@@ -382,32 +648,33 @@ services:
 |----------|---------|-------------|
 | `PORT` | 3000 | Server port |
 | `APPS_PATH` | `./apps` | Path to managed applications |
-| `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker socket path |
-| `LOG_RETENTION` | 7 | Days to keep logs |
+| `LOGS_PATH` | `./data/logs` | Path to log files |
+| `MAX_LOG_LINES` | 1000 | Maximum lines to keep in memory |
+| `GIT_TIMEOUT` | 60000 | Git operations timeout (ms) |
 
 ---
 
 ## 9. Security Considerations
 
+- **Script Whitelisting**: Only allow specific scripts to be executed
+- **Path Traversal**: Sanitize all file paths
+- **Input Validation**: Validate Git URLs, ZIP content
+- **File Access**: Restrict to apps directory
+- **Process Isolation**: Use chroot or containers for better isolation
+- **No Root**: Run processes as non-root user
 - **Authentication**: Basic auth or JWT (configurable)
-- **Authorization**: Role-based access (admin/user/readonly)
-- **Input Validation**: Sanitize all inputs
-- **File Access**: Restrict to allowed directories
-- **Script Execution**: Whitelist allowed npm scripts
-- **Docker Security**: Non-root container user
 
 ---
 
 ## 10. Future Enhancements (Nice to Have)
 
 - [ ] Terminal access (xterm.js)
-- [ ] Git integration (pull/deploy)
-- [ ] Multiple environments (dev/staging/prod)
+- [ ] Environment management (dev/staging/prod)
 - [ ] Notifications (email/Slack)
 - [ ] Metrics dashboard (CPU, Memory, Network)
 - [ ] Backup/restore apps
 - [ ] Plugin system for custom actions
-- [ ] Multi-user support
+- [ ] Multi-user support with roles
 - [ ] Audit logging
 - [ ] Docker Compose management
 
@@ -418,6 +685,7 @@ services:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | Feb 2026 | Initial specification |
+| 1.1 | Feb 2026 | Apps run in same container; configurable scripts; git/zip deployment |
 
 ---
 
