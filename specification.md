@@ -1,6 +1,6 @@
 # yo-node-portal Specification
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** February 2026  
 **Status:** Draft
 
@@ -63,10 +63,12 @@ Web portal for managing and hosting Node.js applications and scripts within the 
 | FR-AR-01 | Auto-discover Node.js applications via `package.json` | Must Have |
 | FR-AR-02 | Parse scripts section from `package.json` | Must Have |
 | FR-AR-03 | Extract metadata (name, description, author) from `package.json` | Must Have |
-| FR-AR-04 | Configure which scripts are visible/executable | Must Have |
-| FR-AR-05 | Hide sensitive scripts (postinstall, etc.) | Must Have |
-| FR-AR-06 | Manual add/remove applications | Could Have |
-| FR-AR-07 | Application categories/tags | Could Have |
+| FR-AR-04 | Override metadata (title, description, etc.) from app config | Must Have |
+| FR-AR-05 | Configure which scripts are visible/executable | Must Have |
+| FR-AR-06 | Hide sensitive scripts (postinstall, etc.) | Must Have |
+| FR-AR-07 | Upload and assign custom icons to applications | Must Have |
+| FR-AR-08 | Manual add/remove applications | Could Have |
+| FR-AR-09 | Application categories/tags | Could Have |
 
 ### 2.2 Deployment
 
@@ -156,30 +158,113 @@ apps/
   },
   "portal": {
     "enabled": true,
+    "title": "My App",                    // Override display title
+    "description": "Custom description",  // Override description
     "category": "api",
+    "icon": null,                         // Icon filename (null = use default)
     "hiddenScripts": ["postinstall", "prepublish"],
     "scripts": {
-      "start": { "label": "Iniciar servidor", "description": "Inicia el servidor en producción" },
-      "dev": { "label": "Desarrollo", "description": "Modo desarrollo con nodemon" },
-      "test": { "label": "Tests", "description": "Ejecuta los tests unitarios" }
+      "start": { 
+        "label": "Iniciar servidor", 
+        "description": "Inicia el servidor en producción",
+        "hidden": false
+      },
+      "dev": { 
+        "label": "Desarrollo", 
+        "description": "Modo desarrollo con nodemon",
+        "hidden": false
+      },
+      "test": { 
+        "label": "Tests", 
+        "description": "Ejecuta los tests unitarios",
+        "hidden": false
+      }
     }
   }
 }
 ```
 
-### 3.3 Portal Configuration Schema
+### 3.3 App Configuration Schema (`.portal-config.json`)
+
+Each application stores its configuration in `.portal-config.json` alongside `package.json`:
 
 ```json
 {
-  "apps": [
-    {
-      "id": "my-wol-app",
-      "path": "./apps/my-wol-app",
-      "hiddenScripts": ["postinstall"]
+  "id": "my-wol-app",
+  "title": "My WOL Manager",
+  "description": "Custom application description",
+  "icon": "custom-icon.png",
+  "category": "api",
+  "hiddenScripts": ["postinstall", "prepublish"],
+  "customScripts": {
+    "start": { 
+      "label": "🚀 Iniciar Servidor", 
+      "description": "Inicia el servidor en producción",
+      "hidden": false
+    },
+    "dev": { 
+      "label": "🔧 Desarrollo", 
+      "description": "Modo desarrollo con nodemon",
+      "hidden": false
     }
-  ]
+  },
+  "deployedAt": "2026-02-05T22:00:00Z",
+  "lastUpdated": "2026-02-05T22:00:00Z"
 }
 ```
+
+**Configuration Merge Rules:**
+- If `.portal-config.json` exists, it overrides `package.json` values
+- `customScripts` merge with package.json scripts (custom takes precedence)
+- `hiddenScripts` applies on top of package.json
+
+### 3.4 Portal Configuration (Global)
+
+Portal-wide configuration stored at `data/portal-config.json`:
+
+```json
+{
+  "general": {
+    "title": "yo-node-portal",
+    "theme": "light",
+    "defaultIcon": "📦"
+  },
+  "icons": {
+    "storagePath": "./data/icons",
+    "maxSize": 102400,  // 100KB max
+    "allowedTypes": ["image/png", "image/jpeg", "image/svg+xml"]
+  },
+  "deployment": {
+    "defaultBranch": "main",
+    "autoInstallDeps": true,
+    "gitTimeout": 60000
+  },
+  "security": {
+    "authEnabled": false,
+    "allowedScripts": []  // Empty = allow all from config
+  }
+}
+```
+
+### 3.5 Icons Storage
+
+```
+data/
+├── portal-config.json          // Global portal configuration
+├── icons/                      // Uploaded icons storage
+│   ├── my-wol-app.png
+│   ├── my-scripts.svg
+│   └── api-gateway.jpg
+└── logs/                       // Global logs
+    └── portal.log
+```
+
+**Icons Rules:**
+- Icons uploaded by user stored in `data/icons/`
+- Each app references icon by filename
+- Default icon shown if none specified
+- Supported formats: PNG, JPEG, SVG
+- Maximum size: 100KB
 
 ---
 
@@ -229,7 +314,46 @@ apps/
 | GET | `/api/apps/:id/scripts` | Get list of visible scripts |
 | PUT | `/api/apps/:id/scripts/:script` | Update script visibility/settings |
 
-### 4.4 Logs
+### 4.4 App Configuration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/apps/:id/config` | Get app configuration (merged) |
+| PUT | `/api/apps/:id/config` | Update app configuration (title, description, icon) |
+| GET | `/api/apps/:id/icon` | Get app icon URL |
+| PUT | `/api/apps/:id/icon` | Upload/change app icon |
+
+#### App Config Payload
+```json
+{
+  "title": "My Custom Title",
+  "description": "My custom description",
+  "category": "utilities",
+  "icon": "custom-icon.png",
+  "hiddenScripts": ["postinstall"],
+  "customScripts": {
+    "start": { "label": "🚀 Start", "hidden": false }
+  }
+}
+```
+
+### 4.5 Icons
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/icons` | List all uploaded icons |
+| POST | `/api/icons` | Upload new icon |
+| DELETE | `/api/icons/:filename` | Delete icon |
+| GET | `/api/icons/:filename` | Serve icon file |
+
+#### Upload Icon
+- Endpoint: `POST /api/icons`
+- Content-Type: `multipart/form-data`
+- Body: `icon` (file field), `name` (optional filename)
+
+---
+
+### 4.6 Logs
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -245,12 +369,31 @@ apps/
 | GET | `/api/apps/:id/config/:file` | Read config file |
 | PUT | `/api/apps/:id/config/:file` | Write config file |
 
-### 4.6 System
+### 4.7 App Configuration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/apps/:id/config` | Get merged app configuration |
+| PUT | `/api/apps/:id/config` | Update app config (title, description, icon) |
+| GET | `/api/apps/:id/icon` | Get app icon URL |
+
+### 4.8 Icons
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/icons` | List uploaded icons |
+| POST | `/api/icons` | Upload new icon (multipart/form-data) |
+| DELETE | `/api/icons/:filename` | Delete icon |
+| GET | `/api/icons/:filename` | Serve icon file |
+
+### 4.9 System
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Portal health check |
 | GET | `/api/system/stats` | System resources |
+| GET | `/api/system/config` | Get portal configuration |
+| PUT | `/api/system/config` | Update portal configuration |
 
 ---
 
@@ -686,6 +829,85 @@ services:
 |---------|------|---------|
 | 1.0 | Feb 2026 | Initial specification |
 | 1.1 | Feb 2026 | Apps run in same container; configurable scripts; git/zip deployment |
+| 1.2 | Feb 2026 | App metadata override (title, description); custom icons; icons gallery; configuration storage |
+
+---
+
+## 12. Configuration Storage
+
+### 12.1 Global Portal Configuration
+
+Location: `data/portal-config.json`
+
+```json
+{
+  "general": {
+    "title": "yo-node-portal",
+    "theme": "light",
+    "defaultIcon": "package"
+  },
+  "icons": {
+    "storagePath": "./data/icons",
+    "maxSize": 102400,
+    "allowedTypes": ["image/png", "image/jpeg", "image/svg+xml"]
+  },
+  "deployment": {
+    "defaultBranch": "main",
+    "autoInstallDeps": true,
+    "gitTimeout": 60000
+  },
+  "security": {
+    "authEnabled": false,
+    "allowedScripts": []
+  }
+}
+```
+
+### 12.2 Application Configuration
+
+Location: `{app-path}/.portal-config.json`
+
+```json
+{
+  "id": "my-wol-app",
+  "title": "My WOL Manager",
+  "description": "Custom application description",
+  "icon": "custom-icon.png",
+  "category": "api",
+  "hiddenScripts": ["postinstall", "prepublish"],
+  "customScripts": {
+    "start": {
+      "label": "Start Server",
+      "description": "Starts the production server",
+      "hidden": false
+    }
+  },
+  "deployedAt": "2026-02-05T22:00:00Z",
+  "lastUpdated": "2026-02-05T22:30:00Z"
+}
+```
+
+### 12.3 Icons Storage
+
+Location: `data/icons/{filename}`
+
+```
+data/
+├── portal-config.json      # Global portal configuration
+├── icons/                  # Uploaded icons
+│   ├── my-wol-app.png
+│   ├── my-scripts.svg
+│   ├── api-gateway.jpg
+│   └── default.png
+└── logs/
+    └── portal.log
+```
+
+**Icons Rules:**
+- Uploaded icons stored in `data/icons/`
+- Referenced by filename in app config
+- Default icon used if none specified
+- Supported: PNG, JPEG, SVG (max 100KB)
 
 ---
 
