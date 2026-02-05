@@ -279,10 +279,46 @@ app.post('/api/icons', (req, res) => {
   res.status(501).json({ success: false, error: 'Icon upload not implemented yet' });
 });
 
+// Logs API
+app.get('/api/apps/:id/logs', (req, res) => {
+  const { id } = req.params;
+  const logs = getLogs(id);
+  res.json({ success: true, data: logs });
+});
+
+// Clear logs
+app.delete('/api/apps/:id/logs', (req, res) => {
+  const { id } = req.params;
+  logBuffer.delete(id);
+  res.json({ success: true });
+});
 // Logs WebSocket
 const wsClients = new Map();
+const logBuffer = new Map();  // Store logs per app (max 1000 lines)
+const MAX_LOG_LINES = 1000;
+
+function addLog(appId, logEntry) {
+  if (!logBuffer.has(appId)) {
+    logBuffer.set(appId, []);
+  }
+  const logs = logBuffer.get(appId);
+  const timestamp = new Date().toISOString();
+  logs.push({ ...logEntry, timestamp });
+  
+  // Keep only last N lines
+  if (logs.length > MAX_LOG_LINES) {
+    logs.shift();
+  }
+}
+
+function getLogs(appId) {
+  return logBuffer.get(appId) || [];
+}
 
 function broadcastLog(appId, message) {
+  // Store log first
+  addLog(appId, message);
+  
   const clients = wsClients.get(appId) || [];
   // console.log(`[WS] Broadcasting to ${clients.length} clients for ${appId}:`, message.type);
   clients.forEach(client => {
@@ -325,9 +361,11 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// SPA fallback
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/')) return next();
+// SPA fallback - must be last
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ success: false, error: 'API endpoint not found' });
+  }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

@@ -187,9 +187,28 @@ const app = createApp({
       }
     };
 
-    const openLogs = (app) => {
+    const openLogs = async (app) => {
       logsApp.value = app;
       logs.value = [];
+      
+      // Fetch historical logs first
+      try {
+        const res = await fetch(`${API_BASE}/apps/${app.id}/logs`);
+        const data = await res.json();
+        if (data.success && data.data) {
+          logs.value = data.data;
+          
+          nextTick(() => {
+            if (logsContainer.value) {
+              logsContainer.value.scrollTop = logsContainer.value.scrollHeight;
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error fetching logs:', err);
+      }
+      
+      // Then connect to live stream
       connectLogStream(app.id);
     };
 
