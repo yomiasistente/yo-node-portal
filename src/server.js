@@ -284,25 +284,38 @@ const wsClients = new Map();
 
 function broadcastLog(appId, message) {
   const clients = wsClients.get(appId) || [];
+  // console.log(`[WS] Broadcasting to ${clients.length} clients for ${appId}:`, message.type);
   clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
+      try {
+        client.send(JSON.stringify(message));
+      } catch (e) {
+        console.error('[WS] Send error:', e.message);
+      }
     }
   });
 }
 
 wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost:3000'}`);
   const appId = url.searchParams.get('app');
+  
+  console.log(`[WS] Connection: ${req.url} -> appId=${appId}`);
   
   if (appId) {
     if (!wsClients.has(appId)) wsClients.set(appId, []);
     wsClients.get(appId).push(ws);
+    console.log(`[WS] Subscribed ${appId}, total clients: ${wsClients.get(appId).length}`);
     
     ws.on('close', () => {
       const clients = wsClients.get(appId);
-      const idx = clients.indexOf(ws);
+      const idx = clients ? clients.indexOf(ws) : -1;
       if (idx !== -1) clients.splice(idx, 1);
+      console.log(`[WS] Disconnected ${appId}, remaining: ${clients ? clients.length : 0}`);
+    });
+    
+    ws.on('error', (err) => {
+      console.error(`[WS] Error for ${appId}:`, err.message);
     });
   }
 });

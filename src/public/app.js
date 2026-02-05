@@ -199,7 +199,14 @@ const app = createApp({
     };
 
     const connectLogStream = (appId) => {
-      const ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/apps/${appId}/logs/stream?app=${appId}`);
+      const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/apps/${appId}/logs/stream?app=${appId}`;
+      console.log('[WS] Connecting to:', wsUrl);
+      
+      const ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        console.log('[WS] Connected');
+      };
       
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -212,7 +219,12 @@ const app = createApp({
         });
       };
       
-      ws.onclose = () => {
+      ws.onerror = (error) => {
+        console.error('[WS] Error:', error);
+      };
+      
+      ws.onclose = (event) => {
+        console.log('[WS] Closed:', event.code, event.reason);
         if (logsApp.value && logsApp.value.id === appId) {
           // Try to reconnect after 3 seconds
           setTimeout(() => connectLogStream(appId), 3000);
