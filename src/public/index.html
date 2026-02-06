@@ -43,7 +43,7 @@
         >
           <div class="tile-header">
             <span class="app-icon">{{ app.icon || '📦' }}</span>
-            <h3>{{ app.name }}</h3>
+            <h3>{{ app.name || 'Sin nombre' }}</h3>
             <span class="status-badge" :class="isRunning(app.id) ? 'online' : 'offline'">
               {{ isRunning(app.id) ? '🟢' : '🔴' }}
             </span>
@@ -55,18 +55,29 @@
           </div>
           
           <div class="tile-scripts">
-            <button 
-              v-for="script in app.scripts.slice(0, 3)" 
-              :key="script.name"
-              class="script-btn"
-              @click="runScript(app, script.name)"
-              :disabled="runningScripts.has(app.id + ':' + script.name)"
-            >
-              {{ script.label || script.name }}
-            </button>
-            <span v-if="app.scripts.length > 3" class="more-scripts">
-              +{{ app.scripts.length - 3 }} más
+            <template v-for="script in (app.scripts || []).slice(0, 3)" :key="script.name">
+              <button 
+                class="script-btn"
+                @click="runScript(app, script.name)"
+                :disabled="isScriptRunning(app.id, script.name)"
+              >
+                {{ script.label || script.name }}
+              </button>
+            </template>
+            <span v-if="(app.scripts || []).length > 3" class="more-scripts">
+              +{{ (app.scripts || []).length - 3 }} más
             </span>
+            <!-- Kill button for first running script -->
+            <template v-for="script in (app.scripts || []).slice(0, 3)" :key="'kill-' + script.name">
+              <button 
+                v-if="isScriptRunning(app.id, script.name)"
+                class="script-btn kill"
+                @click="killScript(app, script.name)"
+                title="Matar proceso"
+              >
+                💀
+              </button>
+            </template>
           </div>
           
           <div class="tile-actions">
@@ -126,7 +137,7 @@
     <div class="modal-overlay" v-if="configApp">
       <div class="modal modal-lg">
         <div class="modal-header">
-          <h3>⚙️ {{ configApp.name }}</h3>
+          <h3>⚙️ {{ configApp?.name || 'Configuración' }}</h3>
           <button class="btn-icon" @click="configApp = null">✕</button>
         </div>
         <div class="modal-body">
@@ -149,7 +160,7 @@
           <div class="config-section">
             <h4>Scripts</h4>
             <div class="scripts-list">
-              <div v-for="script in configApp.scripts" :key="script.name" class="script-item">
+              <div v-for="script in (configApp.scripts || [])" :key="script.name" class="script-item">
                 <span class="script-name">{{ script.name }}</span>
                 <label class="script-toggle">
                   <input type="checkbox" v-model="configForm.visibleScripts" :value="script.name">
@@ -166,6 +177,9 @@
           </div>
           
           <div class="modal-actions">
+            <button type="button" class="btn btn-danger" @click="deleteApp" :disabled="deleting">
+              🗑️ Borrar App
+            </button>
             <button type="button" class="btn" @click="configApp = null">Cancelar</button>
             <button type="button" class="btn btn-primary" @click="saveConfig" :disabled="saving">
               {{ saving ? '⏳ Guardando...' : '💾 Guardar' }}
@@ -179,7 +193,7 @@
     <div class="modal-overlay" v-if="logsApp">
       <div class="modal modal-lg">
         <div class="modal-header">
-          <h3>📝 {{ logsApp.name }} - Logs</h3>
+          <h3>📝 {{ logsApp?.name || 'Logs' }} - Logs</h3>
           <button class="btn-icon" @click="closeLogs">✕</button>
         </div>
         <div class="modal-body">

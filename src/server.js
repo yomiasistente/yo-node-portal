@@ -10,10 +10,49 @@ const APPS_PATH = process.env.APPS_PATH || path.join(__dirname, '..', 'apps');
 const DATA_PATH = process.env.DATA_PATH || path.join(__dirname, '..', 'data');
 const ICONS_PATH = process.env.ICONS_PATH || path.join(DATA_PATH, 'icons');
 const LOGS_PATH = process.env.LOGS_PATH || path.join(DATA_PATH, 'logs');
+const RUNNING_STATE_FILE = process.env.RUNNING_STATE_FILE || path.join(DATA_PATH, 'running.json');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
+// Track running processes: Map<"appId:scriptName", { proc, startTime }>
+const runningProcesses = new Map();
+
+// Persist running state to disk
+function saveRunningState() {
+  try {
+    const state = {};
+    for (const [key, value] of runningProcesses) {
+      state[key] = {
+        startTime: value.startTime.toISOString(),
+        pid: value.proc.pid
+      };
+    }
+    fs.writeFileSync(RUNNING_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (e) {
+    console.error('Error saving running state:', e.message);
+  }
+}
+
+function loadRunningState() {
+  try {
+    if (fs.existsSync(RUNNING_STATE_FILE)) {
+      const state = JSON.parse(fs.readFileSync(RUNNING_STATE_FILE, 'utf8'));
+      for (const [key, value] of Object.entries(state)) {
+        // Just load the state, processes will need to be restarted manually
+        console.log(`[State] Loaded running process: ${key} (was PID ${value.pid})`);
+      }
+      // Clear the file since we can't track actual processes
+      fs.unlinkSync(RUNNING_STATE_FILE);
+    }
+  } catch (e) {
+    console.error('Error loading running state:', e.message);
+  }
+}
+
+// Load persisted state on startup
+loadRunningState();
 
 // Ensure directories exist
 [APPS_PATH, DATA_PATH, ICONS_PATH, LOGS_PATH].forEach(dir => {
@@ -60,6 +99,15 @@ app.get('/api/apps', (req, res) => {
               ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
               : {};
             
+            // Get running scripts for this app
+            const runningScripts = [];
+            for (const [key] of runningProcesses) {
+              if (key.startsWith(`${entry.name}:`)) {
+                const scriptName = key.split(':')[1];
+                runningScripts.push(scriptName);
+              }
+            }
+            
             apps.push({
               id: entry.name,
               name: configJson.title || packageJson.name || entry.name,
@@ -68,6 +116,7 @@ app.get('/api/apps', (req, res) => {
               icon: configJson.icon || null,
               category: configJson.category || 'general',
               scripts: getScripts(entry.name),
+              runningScripts,
               deployedAt: configJson.deployedAt || null,
               lastUpdated: configJson.lastUpdated || null
             });
@@ -149,6 +198,29 @@ app.put('/api/apps/:id/config', (req, res) => {
   }
 });
 
+// Delete app
+app.delete('/api/apps/:id', (req, res) => {
+  const { id } = req.params;
+  const appPath = path.join(APPS_PATH, id);
+  
+  if (!fs.existsSync(appPath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
+  
+  try {
+    // Delete app directory recursively
+    const { execSync } = require('child_process');
+    execSync(`rm -rf "${appPath}"`);
+    
+    // Also clean up logs from buffer
+    logBuffer.delete(id);
+    
+    res.json({ success: true, data: { id } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Scripts
 function getScripts(appId) {
   const appPath = path.join(APPS_PATH, appId);
@@ -191,6 +263,15 @@ app.get('/api/apps/:id/scripts', (req, res) => {
 app.post('/api/apps/:id/script/:script', (req, res) => {
   const { id, script } = req.params;
   const appPath = path.join(APPS_PATH, id);
+  const key = `${id}:${script}`;
+  
+  // Check if already running
+  if (runningProcesses.has(key)) {
+    return res.status(400).json({ 
+      success: false, 
+      error: `Script "${script}" ya esta en ejecucion` 
+    });
+  }
   
   // Execute script
   const proc = spawn('npm', ['run', script], {
@@ -198,6 +279,9 @@ app.post('/api/apps/:id/script/:script', (req, res) => {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env }
   });
+  
+  // Track the process
+  runningProcesses.set(key, { proc, startTime: new Date() });
   
   let output = '';
   proc.stdout.on('data', (data) => {
@@ -213,13 +297,71 @@ app.post('/api/apps/:id/script/:script', (req, res) => {
   });
   
   proc.on('close', (code) => {
+    runningProcesses.delete(key);
     broadcastLog(id, { type: 'exit', data: code.toString() });
     res.json({ success: true, data: { code, output } });
   });
   
   proc.on('error', (err) => {
+    runningProcesses.delete(key);
     res.status(500).json({ success: false, error: err.message });
   });
+});
+
+// Kill running process
+app.post('/api/apps/:id/kill', (req, res) => {
+  const { id } = req.params;
+  const { script } = req.body;
+  
+  if (!script) {
+    return res.status(400).json({ success: false, error: 'Script name required' });
+  }
+  
+  const key = `${id}:${script}`;
+  
+  if (!runningProcesses.has(key)) {
+    return res.status(404).json({ 
+      success: false, 
+      error: `No hay proceso en ejecucion para "${script}"` 
+    });
+  }
+  
+  try {
+    const { proc } = runningProcesses.get(key);
+    
+    // Kill the process tree
+    try {
+      process.kill(-proc.pid, 'SIGKILL');
+    } catch (e) {
+      // Process might already be dead
+    }
+    
+    runningProcesses.delete(key);
+    broadcastLog(id, { type: 'info', data: `Proceso "${script}" matado` });
+    
+    res.json({ success: true, data: { key } });
+  } catch (e) {
+    runningProcesses.delete(key);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Get running processes status
+app.get('/api/apps/:id/running', (req, res) => {
+  const { id } = req.params;
+  const running = [];
+  
+  for (const [key, value] of runningProcesses) {
+    if (key.startsWith(`${id}:`)) {
+      const script = key.split(':')[1];
+      running.push({
+        script,
+        startTime: value.startTime
+      });
+    }
+  }
+  
+  res.json({ success: true, data: running });
 });
 
 // Deployment

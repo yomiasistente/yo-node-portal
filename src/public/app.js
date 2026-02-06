@@ -30,16 +30,17 @@ const app = createApp({
       visibleScripts: []
     });
     const saving = ref(false);
+    const deleting = ref(false);
 
     // Computed
     const filteredApps = computed(() => {
       if (!searchQuery.value) return apps.value;
       const query = searchQuery.value.toLowerCase();
-      return apps.value.filter(a => 
-        a.name.toLowerCase().includes(query) ||
+      return apps.value.filter(a => a && (
+        a.name?.toLowerCase().includes(query) ||
         a.description?.toLowerCase().includes(query) ||
         a.category?.toLowerCase().includes(query)
-      );
+      ));
     });
 
     const hiddenScripts = computed(() => {
@@ -59,6 +60,15 @@ const app = createApp({
         const data = await res.json();
         if (data.success) {
           apps.value = data.data;
+          
+          // Update running scripts state from server
+          const newRunning = new Set();
+          for (const app of data.data) {
+            for (const scriptName of (app.runningScripts || [])) {
+              newRunning.add(`${app.id}:${scriptName}`);
+            }
+          }
+          runningScripts.value = newRunning;
         }
       } catch (err) {
         showNotification('Error cargando aplicaciones', 'error');
@@ -125,6 +135,32 @@ const app = createApp({
       }
     };
 
+    const killScript = async (app, scriptName) => {
+      const key = `${app.id}:${scriptName}`;
+      
+      if (!confirm(`¿Estás seguro de que quieres matar el proceso "${scriptName}"?`)) {
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${app.id}/kill`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ script: scriptName })
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification(`Proceso "${scriptName}" matado`, 'success');
+          runningScripts.value.delete(key);
+        } else {
+          showNotification(data.error || 'Error matando proceso', 'error');
+        }
+      } catch (err) {
+        showNotification('Error matando proceso', 'error');
+      }
+    };
+
     const openConfig = (app) => {
       configApp.value = app;
       configForm.value = {
@@ -184,6 +220,36 @@ const app = createApp({
         showNotification('Error guardando configuración', 'error');
       } finally {
         saving.value = false;
+      }
+    };
+
+    const deleteApp = async () => {
+      if (!configApp.value) return;
+      
+      const appName = configApp.value.name;
+      if (!confirm(`¿Estás seguro de que quieres borrar "${appName}"? Esta acción no se puede deshacer.`)) {
+        return;
+      }
+      
+      deleting.value = true;
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${configApp.value.id}`, {
+          method: 'DELETE'
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification(`"${appName}" ha sido borrada`, 'success');
+          configApp.value = null;
+          fetchApps();
+        } else {
+          showNotification(data.error || 'Error borrando aplicación', 'error');
+        }
+      } catch (err) {
+        showNotification('Error borrando aplicación', 'error');
+      } finally {
+        deleting.value = false;
       }
     };
 
@@ -252,8 +318,17 @@ const app = createApp({
     };
 
     const isRunning = (appId) => {
-      // Simplified - would need real process tracking
+      // Check if any script for this app is running
+      for (const key of runningScripts.value) {
+        if (key.startsWith(`${appId}:`)) {
+          return true;
+        }
+      }
       return false;
+    };
+
+    const isScriptRunning = (appId, scriptName) => {
+      return runningScripts.value.has(`${appId}:${scriptName}`);
     };
 
     const showNotification = (message, type = 'info') => {
@@ -264,9 +339,13 @@ const app = createApp({
       }, 5000);
     };
 
+    // Poll for running state every 5 seconds
+    let pollInterval;
+    
     // Lifecycle
     onMounted(() => {
       fetchApps();
+      pollInterval = setInterval(fetchApps, 5000);
     });
 
     return {
@@ -279,6 +358,7 @@ const app = createApp({
       configApp,
       configForm,
       saving,
+      deleting,
       hiddenScripts,
       logsApp,
       logs,
@@ -286,12 +366,15 @@ const app = createApp({
       runningScripts,
       deployApp,
       runScript,
+      killScript,
       openConfig,
       showScript,
       saveConfig,
+      deleteApp,
       openLogs,
       closeLogs,
-      isRunning
+      isRunning,
+      isScriptRunning
     };
   }
 });
