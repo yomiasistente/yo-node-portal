@@ -16,17 +16,18 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Track running processes: Map<"appId:scriptName", { proc, startTime }>
+// Track running processes: Map<"appId:scriptName", { proc, pid, startTime }>
 const runningProcesses = new Map();
 
-// Persist running state to disk
+// ============ State Persistence ============
+
 function saveRunningState() {
   try {
     const state = {};
     for (const [key, value] of runningProcesses) {
       state[key] = {
-        startTime: value.startTime.toISOString(),
-        pid: value.proc.pid
+        pid: value.pid,
+        startTime: value.startTime.toISOString()
       };
     }
     fs.writeFileSync(RUNNING_STATE_FILE, JSON.stringify(state, null, 2));
@@ -36,15 +37,22 @@ function saveRunningState() {
 }
 
 function loadRunningState() {
+  if (!fs.existsSync(RUNNING_STATE_FILE)) return;
+  
   try {
-    if (fs.existsSync(RUNNING_STATE_FILE)) {
-      const state = JSON.parse(fs.readFileSync(RUNNING_STATE_FILE, 'utf8'));
-      for (const [key, value] of Object.entries(state)) {
-        // Just load the state, processes will need to be restarted manually
-        console.log(`[State] Loaded running process: ${key} (was PID ${value.pid})`);
+    const state = JSON.parse(fs.readFileSync(RUNNING_STATE_FILE, 'utf8'));
+    for (const [key, value] of Object.entries(state)) {
+      // Verify process is still alive
+      try {
+        process.kill(value.pid, 0);
+        runningProcesses.set(key, {
+          pid: value.pid,
+          startTime: new Date(value.startTime)
+        });
+        console.log(`[State] Loaded: ${key} (PID ${value.pid})`);
+      } catch (e) {
+        // Process dead, skip
       }
-      // Clear the file since we can't track actual processes
-      fs.unlinkSync(RUNNING_STATE_FILE);
     }
   } catch (e) {
     console.error('Error loading running state:', e.message);
@@ -273,15 +281,39 @@ app.post('/api/apps/:id/script/:script', (req, res) => {
     });
   }
   
-  // Execute script
-  const proc = spawn('npm', ['run', script], {
+  // Get script command from package.json
+  const packagePath = path.join(appPath, 'package.json');
+  let command = 'node';
+  let args = [];
+  
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const scriptCmd = packageJson.scripts?.[script];
+    if (scriptCmd) {
+      // Parse command like "node src/server.js" or "nodemon src/server.js"
+      const parts = scriptCmd.split(/\s+/);
+      command = parts[0];
+      args = parts.slice(1);
+    }
+  } catch (e) {
+    // Fallback to npm
+    args = ['run', script];
+    command = 'npm';
+  }
+  
+  // Execute directly (node or the command from package.json)
+  const proc = spawn(command, args, {
     cwd: appPath,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env }
   });
   
-  // Track the process
-  runningProcesses.set(key, { proc, startTime: new Date() });
+  const startTime = new Date();
+  
+  // Track the process - proc.pid is now the actual node process!
+  runningProcesses.set(key, { proc, pid: proc.pid, startTime });
+  saveRunningState();
+  console.log(`[Script] Started ${key} with PID ${proc.pid}`);
   
   let output = '';
   proc.stdout.on('data', (data) => {
@@ -298,12 +330,14 @@ app.post('/api/apps/:id/script/:script', (req, res) => {
   
   proc.on('close', (code) => {
     runningProcesses.delete(key);
-    broadcastLog(id, { type: 'exit', data: code.toString() });
+    saveRunningState();
+    broadcastLog(id, { type: 'exit', data: code !== null ? code.toString() : 'killed' });
     res.json({ success: true, data: { code, output } });
   });
   
   proc.on('error', (err) => {
     runningProcesses.delete(key);
+    saveRunningState();
     res.status(500).json({ success: false, error: err.message });
   });
 });
@@ -326,42 +360,35 @@ app.post('/api/apps/:id/kill', (req, res) => {
     });
   }
   
-  try {
-    const { proc } = runningProcesses.get(key);
-    
-    // Kill the process tree
+  const { pid } = runningProcesses.get(key);
+  const appPath = path.join(APPS_PATH, id);
+  
+  // Try multiple kill strategies
+  const killStrategies = [
+    // Strategy 1: Kill process group
+    () => process.kill(-pid, 'SIGKILL'),
+    // Strategy 2: Kill direct PID
+    () => process.kill(pid, 'SIGKILL'),
+    // Strategy 3: Find and kill by command line
+    () => {
+      const { execSync } = require('child_process');
+      execSync(`pkill -f "node.*${script}" 2>/dev/null || true`);
+    }
+  ];
+  
+  for (const strategy of killStrategies) {
     try {
-      process.kill(-proc.pid, 'SIGKILL');
+      strategy();
     } catch (e) {
-      // Process might already be dead
-    }
-    
-    runningProcesses.delete(key);
-    broadcastLog(id, { type: 'info', data: `Proceso "${script}" matado` });
-    
-    res.json({ success: true, data: { key } });
-  } catch (e) {
-    runningProcesses.delete(key);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// Get running processes status
-app.get('/api/apps/:id/running', (req, res) => {
-  const { id } = req.params;
-  const running = [];
-  
-  for (const [key, value] of runningProcesses) {
-    if (key.startsWith(`${id}:`)) {
-      const script = key.split(':')[1];
-      running.push({
-        script,
-        startTime: value.startTime
-      });
+      // Ignore errors, try next strategy
     }
   }
   
-  res.json({ success: true, data: running });
+  runningProcesses.delete(key);
+  saveRunningState();
+  broadcastLog(id, { type: 'info', data: `Proceso "${script}" matado` });
+  
+  res.json({ success: true, data: { key } });
 });
 
 // Deployment
@@ -395,11 +422,6 @@ app.post('/api/deploy/git', (req, res) => {
   });
 });
 
-app.post('/api/deploy/zip', (req, res) => {
-  // Simplified - would need multipart handling
-  res.status(501).json({ success: false, error: 'ZIP deployment not implemented yet' });
-});
-
 // Icons
 app.get('/api/icons', (req, res) => {
   const icons = [];
@@ -416,11 +438,6 @@ app.get('/api/icons', (req, res) => {
   res.json({ success: true, data: icons });
 });
 
-app.post('/api/icons', (req, res) => {
-  // Simplified - would need file upload handling
-  res.status(501).json({ success: false, error: 'Icon upload not implemented yet' });
-});
-
 // Logs API
 app.get('/api/apps/:id/logs', (req, res) => {
   const { id } = req.params;
@@ -434,6 +451,7 @@ app.delete('/api/apps/:id/logs', (req, res) => {
   logBuffer.delete(id);
   res.json({ success: true });
 });
+
 // Logs WebSocket
 const wsClients = new Map();
 const logBuffer = new Map();  // Store logs per app (max 1000 lines)
@@ -462,7 +480,6 @@ function broadcastLog(appId, message) {
   addLog(appId, message);
   
   const clients = wsClients.get(appId) || [];
-  // console.log(`[WS] Broadcasting to ${clients.length} clients for ${appId}:`, message.type);
   clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
       try {
@@ -478,22 +495,14 @@ wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost:3000'}`);
   const appId = url.searchParams.get('app');
   
-  console.log(`[WS] Connection: ${req.url} -> appId=${appId}`);
-  
   if (appId) {
     if (!wsClients.has(appId)) wsClients.set(appId, []);
     wsClients.get(appId).push(ws);
-    console.log(`[WS] Subscribed ${appId}, total clients: ${wsClients.get(appId).length}`);
     
     ws.on('close', () => {
       const clients = wsClients.get(appId);
       const idx = clients ? clients.indexOf(ws) : -1;
       if (idx !== -1) clients.splice(idx, 1);
-      console.log(`[WS] Disconnected ${appId}, remaining: ${clients ? clients.length : 0}`);
-    });
-    
-    ws.on('error', (err) => {
-      console.error(`[WS] Error for ${appId}:`, err.message);
     });
   }
 });
