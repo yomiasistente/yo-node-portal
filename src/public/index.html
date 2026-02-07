@@ -83,8 +83,8 @@
           
           <div class="tile-actions">
             <button class="btn-icon" @click="openConfig(app)" title="Configurar">⚙️</button>
-            <button class="btn-icon" @click="openLogs(app)" title="Logs">📝</button>
-            <button class="btn-icon" @click="openJsonFiles(app)" title="Archivos JSON">📄</button>
+            <button class="btn-icon" @click="openLogs(app)" title="Logs">📜</button>
+            <button class="btn-icon" @click="openJsonFiles(app)" title="Archivos JSON">📝</button>
           </div>
         </div>
       </div>
@@ -312,7 +312,7 @@
     <div class="modal-overlay" v-if="logsApp">
       <div class="modal modal-lg">
         <div class="modal-header">
-          <h3>📝 {{ logsApp?.name || 'Logs' }} - Logs</h3>
+          <h3>📜 {{ logsApp?.name || 'Logs' }}</h3>
           <button class="btn-icon" @click="closeLogs">✕</button>
         </div>
         <div class="modal-body">
@@ -329,7 +329,7 @@
     <div class="modal-overlay" v-if="jsonFilesApp">
       <div class="modal modal-lg">
         <div class="modal-header">
-          <h3>📄 {{ jsonFilesApp?.name || 'Archivos' }} - JSON</h3>
+          <h3>📝 {{ jsonFilesApp?.name || 'Archivos' }} - JSON</h3>
           <button class="btn-icon" @click="jsonFilesApp = null">✕</button>
         </div>
         <div class="modal-body">
@@ -345,7 +345,7 @@
                 class="file-item"
                 @click="openJsonEditor(file)"
               >
-                <span class="file-icon">📄</span>
+                <span class="file-icon">📝</span>
                 <span class="file-name">{{ file.name }}</span>
                 <span class="file-path">{{ file.path }}</span>
               </div>
