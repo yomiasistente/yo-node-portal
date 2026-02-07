@@ -31,6 +31,14 @@ const app = createApp({
     });
     const saving = ref(false);
     const deleting = ref(false);
+    const editingScript = ref(false);
+    
+    const scriptForm = ref({
+      name: '',
+      command: '',
+      label: '',
+      description: ''
+    });
 
     // Computed
     const filteredApps = computed(() => {
@@ -169,12 +177,135 @@ const app = createApp({
         category: app.category || '',
         visibleScripts: app.scripts?.map(s => s.name) || []
       };
+      resetScriptForm();
     };
 
     const showScript = (app, scriptName) => {
       const visible = configForm.value.visibleScripts || [];
       if (!visible.includes(scriptName)) {
         configForm.value.visibleScripts.push(scriptName);
+      }
+    };
+
+    const resetScriptForm = () => {
+      scriptForm.value = { name: '', command: '', label: '', description: '' };
+      editingScript.value = false;
+    };
+
+    const addScript = async () => {
+      if (!configApp.value) return;
+      if (!scriptForm.value.name || !scriptForm.value.command) {
+        showNotification('Nombre y comando requeridos', 'error');
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${configApp.value.id}/script`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scriptForm.value)
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification('Script creado correctamente', 'success');
+          resetScriptForm();
+          fetchAppDetails(); // Refresh scripts list
+        } else {
+          showNotification(data.error || 'Error creando script', 'error');
+        }
+      } catch (err) {
+        showNotification('Error creando script', 'error');
+      }
+    };
+
+    const editScript = (script) => {
+      scriptForm.value = {
+        name: script.name,
+        command: script.command,
+        label: script.label || '',
+        description: script.description || ''
+      };
+      editingScript.value = true;
+    };
+
+    const saveScript = async () => {
+      if (!configApp.value) return;
+      if (!scriptForm.value.name || !scriptForm.value.command) {
+        showNotification('Nombre y comando requeridos', 'error');
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${configApp.value.id}/script`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(scriptForm.value)
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification('Script actualizado correctamente', 'success');
+          resetScriptForm();
+          fetchAppDetails(); // Refresh scripts list
+        } else {
+          showNotification(data.error || 'Error actualizando script', 'error');
+        }
+      } catch (err) {
+        showNotification('Error actualizando script', 'error');
+      }
+    };
+
+    const deleteScript = async (script) => {
+      if (!confirm(`¿Estás seguro de borrar "${script.label || script.name}"?`)) {
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${configApp.value.id}/script/${script.name}`, {
+          method: 'DELETE'
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification(script.type === 'package' ? 'Script ocultado' : 'Script borrado', 'success');
+          fetchAppDetails(); // Refresh scripts list
+        } else {
+          showNotification(data.error || 'Error borrando script', 'error');
+        }
+      } catch (err) {
+        showNotification('Error borrando script', 'error');
+      }
+    };
+
+    const restoreScript = async (script) => {
+      try {
+        const res = await fetch(`${API_BASE}/apps/${configApp.value.id}/script/${script.name}/restore`, {
+          method: 'POST'
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification('Script restaurado', 'success');
+          fetchAppDetails(); // Refresh scripts list
+        } else {
+          showNotification(data.error || 'Error restaurando script', 'error');
+        }
+      } catch (err) {
+        showNotification('Error restaurando script', 'error');
+      }
+    };
+
+    const fetchAppDetails = async () => {
+      if (!configApp.value) return;
+      try {
+        const res = await fetch(`${API_BASE}/apps/${configApp.value.id}`);
+        const data = await res.json();
+        if (data.success) {
+          configApp.value.scripts = data.data.scripts;
+        }
+      } catch (err) {
+        console.error('Error fetching app details:', err);
       }
     };
 
@@ -359,6 +490,8 @@ const app = createApp({
       configForm,
       saving,
       deleting,
+      scriptForm,
+      editingScript,
       hiddenScripts,
       logsApp,
       logs,
@@ -368,9 +501,13 @@ const app = createApp({
       runScript,
       killScript,
       openConfig,
-      showScript,
       saveConfig,
       deleteApp,
+      addScript,
+      editScript,
+      saveScript,
+      deleteScript,
+      restoreScript,
       openLogs,
       closeLogs,
       isRunning,

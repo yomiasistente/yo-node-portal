@@ -55,7 +55,7 @@
           </div>
           
           <div class="tile-scripts">
-            <template v-for="script in (app.scripts || []).slice(0, 3)" :key="script.name">
+            <template v-for="script in (app.scripts || []).filter(s => !s.deleted).slice(0, 3)" :key="script.name">
               <button 
                 class="script-btn"
                 @click="runScript(app, script.name)"
@@ -65,10 +65,10 @@
               </button>
             </template>
             <span v-if="(app.scripts || []).length > 3" class="more-scripts">
-              +{{ (app.scripts || []).length - 3 }} más
+              +{{ (app.scripts || []).filter(s => !s.deleted).length - 3 }} más
             </span>
             <!-- Kill button for first running script -->
-            <template v-for="script in (app.scripts || []).slice(0, 3)" :key="'kill-' + script.name">
+            <template v-for="script in (app.scripts || []).filter(s => !s.deleted).slice(0, 3)" :key="'kill-' + script.name">
               <button 
                 v-if="isScriptRunning(app.id, script.name)"
                 class="script-btn kill"
@@ -159,18 +159,89 @@
           
           <div class="config-section">
             <h4>Scripts</h4>
-            <div class="scripts-list">
-              <div v-for="script in (configApp.scripts || [])" :key="script.name" class="script-item">
-                <span class="script-name">{{ script.name }}</span>
-                <label class="script-toggle">
-                  <input type="checkbox" v-model="configForm.visibleScripts" :value="script.name">
-                  Visible
-                </label>
+            
+            <!-- Scripts List -->
+            <div class="scripts-list" v-if="configApp.scripts && configApp.scripts.length > 0">
+              <div 
+                v-for="script in configApp.scripts" 
+                :key="script.name" 
+                class="script-item"
+                :class="{ deleted: script.deleted }"
+              >
+                <div class="script-info">
+                  <span class="script-name">
+                    {{ script.label || script.name }}
+                    <span v-if="script.deleted" class="badge-deleted">(borrado)</span>
+                  </span>
+                  <span class="script-command">{{ script.command }}</span>
+                  <span class="script-type" :class="script.type">{{ script.type }}</span>
+                </div>
+                <div class="script-actions">
+                  <button 
+                    v-if="script.deleted"
+                    class="btn-icon" 
+                    @click="restoreScript(script)"
+                    title="Restaurar"
+                  >♻️</button>
+                  <button 
+                    v-if="!script.deleted"
+                    class="btn-icon" 
+                    @click="deleteScript(script)"
+                    :title="script.type === 'custom' ? 'Borrar permanentemente' : 'Ocultar'"
+                  >🗑️</button>
+                </div>
               </div>
-              <div v-for="script in hiddenScripts" :key="script" class="script-item hidden">
-                <span class="script-name">{{ script }}</span>
-                <button type="button" class="btn btn-small" @click="showScript(configApp, script)">
-                  Mostrar
+            </div>
+            <p v-else class="empty-text">No hay scripts configurados</p>
+            
+            <!-- Add Script Form -->
+            <div class="add-script-form">
+              <h5>{{ editingScript ? 'Editar Script' : 'Nuevo Script' }}</h5>
+              <div class="form-row">
+                <input 
+                  type="text" 
+                  v-model="scriptForm.name" 
+                  :placeholder="editingScript ? 'Nombre (no editable)' : 'Nombre'"
+                  :disabled="editingScript"
+                  class="form-input"
+                >
+                <input 
+                  type="text" 
+                  v-model="scriptForm.command" 
+                  placeholder="Comando (ej: node server.js)"
+                  class="form-input"
+                >
+              </div>
+              <div class="form-row">
+                <input 
+                  type="text" 
+                  v-model="scriptForm.label" 
+                  placeholder="Label (opcional)"
+                  class="form-input"
+                >
+                <input 
+                  type="text" 
+                  v-model="scriptForm.description" 
+                  placeholder="Descripción (opcional)"
+                  class="form-input"
+                >
+              </div>
+              <div class="form-actions">
+                <button 
+                  v-if="editingScript"
+                  type="button" 
+                  class="btn" 
+                  @click="resetScriptForm"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="button" 
+                  class="btn btn-primary" 
+                  @click="editingScript ? saveScript() : addScript()"
+                  :disabled="!scriptForm.name || !scriptForm.command"
+                >
+                  {{ editingScript ? '💾 Guardar' : '➕ Añadir' }}
                 </button>
               </div>
             </div>

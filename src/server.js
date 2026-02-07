@@ -88,6 +88,64 @@ app.use('/api/icons', express.static(ICONS_PATH));
 
 // ============ API Routes ============
 
+// Helper function to get scripts for an app
+function getAppScripts(appId) {
+  const appPath = path.join(APPS_PATH, appId);
+  const packagePath = path.join(appPath, 'package.json');
+  const configPath = path.join(appPath, '.portal-config.json');
+  
+  const scripts = [];
+  
+  try {
+    let packageScripts = {};
+    if (fs.existsSync(packagePath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      packageScripts = packageJson.scripts || {};
+    }
+    
+    const configJson = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
+    
+    const customScripts = configJson.customScripts || {};
+    const deletedScripts = configJson.deletedScripts || [];
+    
+    // Add package.json scripts (all, even deleted)
+    for (const [name, command] of Object.entries(packageScripts)) {
+      const isDeleted = deletedScripts.includes(name);
+      const custom = customScripts[name] || {};
+      scripts.push({
+        name,
+        command,
+        label: custom.label || name,
+        description: custom.description || '',
+        type: 'package',
+        deleted: isDeleted,
+        executable: true
+      });
+    }
+    
+    // Add custom scripts
+    for (const [name, data] of Object.entries(customScripts)) {
+      if (!packageScripts[name]) {
+        scripts.push({
+          name,
+          command: data.command || '',
+          label: data.label || name,
+          description: data.description || '',
+          type: 'custom',
+          deleted: false,
+          executable: true
+        });
+      }
+    }
+  } catch (e) {
+    console.error(`Error getting scripts for ${appId}:`, e.message);
+  }
+  
+  return scripts;
+}
+
 // Apps
 app.get('/api/apps', (req, res) => {
   const apps = [];
@@ -123,7 +181,7 @@ app.get('/api/apps', (req, res) => {
               version: packageJson.version || '',
               icon: configJson.icon || null,
               category: configJson.category || 'general',
-              scripts: getScripts(entry.name),
+              scripts: getAppScripts(entry.name),
               runningScripts,
               deployedAt: configJson.deployedAt || null,
               lastUpdated: configJson.lastUpdated || null
@@ -164,8 +222,7 @@ app.get('/api/apps/:id', (req, res) => {
         version: packageJson.version,
         icon: configJson.icon,
         category: configJson.category,
-        scripts: getScripts(id),
-        hiddenScripts: configJson.hiddenScripts || [],
+        scripts: getAppScripts(id),
         deployedAt: configJson.deployedAt,
         lastUpdated: configJson.lastUpdated,
         packageJson
@@ -178,7 +235,7 @@ app.get('/api/apps/:id', (req, res) => {
 
 app.put('/api/apps/:id/config', (req, res) => {
   const { id } = req.params;
-  const { title, description, icon, category, hiddenScripts, customScripts } = req.body;
+  const { title, description, icon, category } = req.body;
   const appPath = path.join(APPS_PATH, id);
   const configPath = path.join(appPath, '.portal-config.json');
   
@@ -195,8 +252,6 @@ app.put('/api/apps/:id/config', (req, res) => {
     if (description !== undefined) config.description = description;
     if (icon !== undefined) config.icon = icon;
     if (category !== undefined) config.category = category;
-    if (hiddenScripts !== undefined) config.hiddenScripts = hiddenScripts;
-    if (customScripts !== undefined) config.customScripts = customScripts;
     config.lastUpdated = new Date().toISOString();
     
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -206,68 +261,181 @@ app.put('/api/apps/:id/config', (req, res) => {
   }
 });
 
-// Delete app
-app.delete('/api/apps/:id', (req, res) => {
+// ============ Scripts CRUD ============
+
+app.get('/api/apps/:id/scripts', (req, res) => {
   const { id } = req.params;
   const appPath = path.join(APPS_PATH, id);
+  const packagePath = path.join(appPath, 'package.json');
+  const configPath = path.join(appPath, '.portal-config.json');
+  
+  const scripts = [];
+  
+  try {
+    // Get package.json scripts
+    let packageScripts = {};
+    if (fs.existsSync(packagePath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      packageScripts = packageJson.scripts || {};
+    }
+    
+    // Get custom scripts from config
+    const configJson = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
+    
+    const customScripts = configJson.customScripts || {};
+    const deletedScripts = configJson.deletedScripts || [];
+    
+    // Add package.json scripts (not deleted)
+    for (const [name, command] of Object.entries(packageScripts)) {
+      if (!deletedScripts.includes(name)) {
+        const custom = customScripts[name] || {};
+        scripts.push({
+          name,
+          command,
+          label: custom.label || name,
+          description: custom.description || '',
+          type: 'package',
+          executable: true
+        });
+      }
+    }
+    
+    // Add custom scripts
+    for (const [name, data] of Object.entries(customScripts)) {
+      if (!packageScripts[name]) {
+        scripts.push({
+          name,
+          command: data.command || '',
+          label: data.label || name,
+          description: data.description || '',
+          type: 'custom',
+          executable: true
+        });
+      }
+    }
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message });
+  }
+  
+  res.json({ success: true, data: scripts });
+});
+
+// Create or update script
+app.put('/api/apps/:id/script', (req, res) => {
+  const { id } = req.params;
+  const { name, command, label, description } = req.body;
+  
+  if (!name) {
+    return res.status(400).json({ success: false, error: 'Script name required' });
+  }
+  
+  const appPath = path.join(APPS_PATH, id);
+  const configPath = path.join(appPath, '.portal-config.json');
   
   if (!fs.existsSync(appPath)) {
     return res.status(404).json({ success: false, error: 'App not found' });
   }
   
   try {
-    // Delete app directory recursively
-    const { execSync } = require('child_process');
-    execSync(`rm -rf "${appPath}"`);
+    const config = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
     
-    // Also clean up logs from buffer
-    logBuffer.delete(id);
+    config.customScripts = config.customScripts || {};
+    config.customScripts[name] = {
+      command: command || '',
+      label: label || name,
+      description: description || ''
+    };
+    config.lastUpdated = new Date().toISOString();
     
-    res.json({ success: true, data: { id } });
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    res.json({ success: true, data: config.customScripts[name] });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Scripts
-function getScripts(appId) {
-  const appPath = path.join(APPS_PATH, appId);
-  const packagePath = path.join(appPath, 'package.json');
+// Delete script
+app.delete('/api/apps/:id/script/:script', (req, res) => {
+  const { id, script } = req.params;
+  const appPath = path.join(APPS_PATH, id);
   const configPath = path.join(appPath, '.portal-config.json');
   
-  if (!fs.existsSync(packagePath)) return [];
+  if (!fs.existsSync(appPath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
   
   try {
-    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-    const configJson = fs.existsSync(configPath)
+    const config = fs.existsSync(configPath)
       ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
       : {};
     
-    const hiddenScripts = configJson.hiddenScripts || [];
-    const customScripts = configJson.customScripts || {};
-    
-    const scripts = [];
-    for (const [name, command] of Object.entries(packageJson.scripts || {})) {
-      if (!hiddenScripts.includes(name)) {
-        scripts.push({
-          name,
-          command,
-          label: customScripts[name]?.label || name,
-          description: customScripts[name]?.description || '',
-          executable: true
-        });
+    // Check if script exists in package.json (mark as deleted)
+    const packagePath = path.join(appPath, 'package.json');
+    if (fs.existsSync(packagePath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      if (packageJson.scripts && packageJson.scripts[script]) {
+        // Mark as deleted in package.json scripts
+        config.deletedScripts = config.deletedScripts || [];
+        if (!config.deletedScripts.includes(script)) {
+          config.deletedScripts.push(script);
+        }
+        // Remove from customScripts if exists
+        if (config.customScripts && config.customScripts[script]) {
+          delete config.customScripts[script];
+        }
       }
     }
-    return scripts;
+    
+    // If custom script, remove from customScripts
+    if (config.customScripts && config.customScripts[script]) {
+      delete config.customScripts[script];
+    }
+    
+    config.lastUpdated = new Date().toISOString();
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    
+    res.json({ success: true, data: { name: script } });
   } catch (e) {
-    return [];
+    res.status(500).json({ success: false, error: e.message });
   }
-}
-
-app.get('/api/apps/:id/scripts', (req, res) => {
-  res.json({ success: true, data: getScripts(req.params.id) });
 });
 
+// Restore deleted package.json script
+app.post('/api/apps/:id/script/:script/restore', (req, res) => {
+  const { id, script } = req.params;
+  const appPath = path.join(APPS_PATH, id);
+  const configPath = path.join(appPath, '.portal-config.json');
+  
+  if (!fs.existsSync(appPath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
+  
+  try {
+    const config = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      : {};
+    
+    if (config.deletedScripts) {
+      config.deletedScripts = config.deletedScripts.filter(s => s !== script);
+    }
+    if (config.customScripts && config.customScripts[script]) {
+      delete config.customScripts[script];
+    }
+    
+    config.lastUpdated = new Date().toISOString();
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Execute script
 app.post('/api/apps/:id/script/:script', (req, res) => {
   const { id, script } = req.params;
   const appPath = path.join(APPS_PATH, id);
@@ -281,27 +449,42 @@ app.post('/api/apps/:id/script/:script', (req, res) => {
     });
   }
   
-  // Get script command from package.json
+  // Get script command from config (custom overrides package.json)
+  const configPath = path.join(appPath, '.portal-config.json');
   const packagePath = path.join(appPath, 'package.json');
+  
   let command = 'node';
   let args = [];
   
   try {
-    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-    const scriptCmd = packageJson.scripts?.[script];
-    if (scriptCmd) {
-      // Parse command like "node src/server.js" or "nodemon src/server.js"
-      const parts = scriptCmd.split(/\s+/);
-      command = parts[0];
-      args = parts.slice(1);
+    // First check custom scripts in config
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const customScript = config.customScripts?.[script];
+      if (customScript && customScript.command) {
+        const parts = customScript.command.split(/\s+/);
+        command = parts[0];
+        args = parts.slice(1);
+        console.log(`[Script] Using custom command for ${script}: ${customScript.command}`);
+      }
+    }
+    
+    // If not found, check package.json
+    if (args.length === 0 && fs.existsSync(packagePath)) {
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      const scriptCmd = packageJson.scripts?.[script];
+      if (scriptCmd) {
+        const parts = scriptCmd.split(/\s+/);
+        command = parts[0];
+        args = parts.slice(1);
+        console.log(`[Script] Using package.json command for ${script}: ${scriptCmd}`);
+      }
     }
   } catch (e) {
-    // Fallback to npm
-    args = ['run', script];
-    command = 'npm';
+    console.error(`[Script] Error getting command for ${script}:`, e.message);
   }
   
-  // Execute directly (node or the command from package.json)
+  // Execute the script
   const proc = spawn(command, args, {
     cwd: appPath,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -310,7 +493,7 @@ app.post('/api/apps/:id/script/:script', (req, res) => {
   
   const startTime = new Date();
   
-  // Track the process - proc.pid is now the actual node process!
+  // Track the process
   runningProcesses.set(key, { proc, pid: proc.pid, startTime });
   saveRunningState();
   console.log(`[Script] Started ${key} with PID ${proc.pid}`);

@@ -412,8 +412,55 @@ body {
 .scripts-list {
   border: 1px solid var(--border);
   border-radius: 6px;
-  max-height: 200px;
+  max-height: 250px;
   overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.empty-text {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  margin-bottom: 1rem;
+}
+
+.add-script-form {
+  background: var(--bg);
+  padding: 1rem;
+  border-radius: 6px;
+  margin-top: 1rem;
+}
+
+.add-script-form h5 {
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+  color: var(--text-muted);
+}
+
+.form-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.form-input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.form-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
 }
 
 .script-item {
@@ -433,9 +480,58 @@ body {
   opacity: 0.7;
 }
 
+.script-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+}
+
 .script-name {
   font-family: monospace;
   font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.script-command {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.script-type {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  display: inline-block;
+  width: fit-content;
+}
+
+.script-type.package {
+  background: #3b82f6;
+  color: white;
+}
+
+.script-type.custom {
+  background: #22c55e;
+  color: white;
+}
+
+.script-item.deleted {
+  background: #fef2f2;
+  opacity: 0.7;
+}
+
+.badge-deleted {
+  font-size: 0.7rem;
+  color: #ef4444;
+  font-weight: normal;
+}
+
+.script-actions {
+  display: flex;
+  gap: 0.25rem;
 }
 
 .script-toggle {
