@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
 const { exec, spawn } = require('child_process');
+const AdmZip = require('adm-zip');
 
 const PORT = process.env.PORT || 3000;
 const APPS_PATH = process.env.APPS_PATH || path.join(__dirname, '..', 'apps');
@@ -70,6 +71,10 @@ loadRunningState();
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// For multipart form data (ZIP uploads)
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 // CORS
 app.use((req, res, next) => {
@@ -256,6 +261,41 @@ app.put('/api/apps/:id/config', (req, res) => {
     
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
     res.json({ success: true, data: config });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Delete app
+app.delete('/api/apps/:id', (req, res) => {
+  const { id } = req.params;
+  const appPath = path.join(APPS_PATH, id);
+  
+  if (!fs.existsSync(appPath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
+  
+  try {
+    // Stop any running processes for this app
+    for (const [key] of runningProcesses) {
+      if (key.startsWith(`${id}:`)) {
+        const { proc } = runningProcesses.get(key);
+        try {
+          process.kill(-proc.pid, 'SIGKILL');
+        } catch (e) {
+          // Process might already be dead
+        }
+        runningProcesses.delete(key);
+      }
+    }
+    
+    // Delete app directory recursively
+    fs.rmSync(appPath, { recursive: true, force: true });
+    
+    // Also clean up logs from buffer
+    logBuffer.delete(id);
+    
+    res.json({ success: true, data: { id } });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -603,6 +643,86 @@ app.post('/api/deploy/git', (req, res) => {
       res.json({ success: true, data: { id, path: appPath } });
     }
   });
+});
+
+// ZIP Deployment
+app.post('/api/deploy/zip', upload.single('zip'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: 'ZIP file required' });
+  }
+  
+  const { targetPath, installDeps = true } = req.body;
+  const id = targetPath || `app-${Date.now()}`;
+  const appPath = path.join(APPS_PATH, id);
+  
+  try {
+    // Extract ZIP
+    const zip = new AdmZip(req.file.buffer);
+    const zipEntries = zip.getEntries();
+    
+    // Determine if ZIP has a root folder or files directly
+    const hasRootFolder = zipEntries.length > 0 && 
+      zipEntries[0].entryName.includes('/');
+    
+    // Extract to temp location first
+    const tempPath = path.join(DATA_PATH, 'temp', id);
+    if (!fs.existsSync(tempPath)) {
+      fs.mkdirSync(tempPath, { recursive: true });
+    }
+    
+    zip.extractAllTo(tempPath, true);
+    
+    // Move contents to final location
+    if (hasRootFolder) {
+      const rootFolder = zipEntries[0].entryName.split('/')[0];
+      const sourcePath = path.join(tempPath, rootFolder);
+      
+      if (fs.existsSync(appPath)) {
+        fs.rmSync(appPath, { recursive: true });
+      }
+      fs.renameSync(sourcePath, appPath);
+    } else {
+      if (fs.existsSync(appPath)) {
+        fs.rmSync(appPath, { recursive: true });
+      }
+      fs.mkdirSync(appPath, { recursive: true });
+      
+      // Move all files from temp to appPath
+      for (const entry of zipEntries) {
+        const source = path.join(tempPath, entry.entryName);
+        const dest = path.join(appPath, entry.entryName);
+        
+        if (entry.isDirectory) {
+          if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
+          }
+        } else {
+          const destDir = path.dirname(dest);
+          if (!fs.existsSync(destDir)) {
+            fs.mkdirSync(destDir, { recursive: true });
+          }
+          fs.copyFileSync(source, dest);
+        }
+      }
+    }
+    
+    // Clean up temp
+    fs.rmSync(tempPath, { recursive: true });
+    
+    // Install deps if needed
+    if (installDeps) {
+      exec('npm install', { cwd: appPath }, (err) => {
+        if (err) {
+          console.error('npm install failed:', err.message);
+        }
+        res.json({ success: true, data: { id, path: appPath } });
+      });
+    } else {
+      res.json({ success: true, data: { id, path: appPath } });
+    }
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // Icons

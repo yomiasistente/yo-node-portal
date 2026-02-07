@@ -15,7 +15,7 @@
         <span class="logo">🌙</span>
         <h1>yo-node-portal</h1>
       </div>
-      <button class="btn btn-primary" @click="showDeployModal = true">
+      <button class="btn btn-primary" @click="openDeployModal">
         🚀 Desplegar
       </button>
     </header>
@@ -90,7 +90,7 @@
       <!-- Empty State -->
       <div v-else class="empty-state">
         <p>No hay aplicaciones desplegadas.</p>
-        <button class="btn btn-primary" @click="showDeployModal = true">
+        <button class="btn btn-primary" @click="openDeployModal">
           🚀 Desplegar primera aplicación
         </button>
       </div>
@@ -104,32 +104,78 @@
           <h3>🚀 Desplegar Aplicación</h3>
           <button class="btn-icon" @click="showDeployModal = false">✕</button>
         </div>
-        <form @submit.prevent="deployApp" class="modal-body">
-          <div class="form-group">
-            <label>URL del repositorio Git *</label>
-            <input type="url" v-model="deployForm.repoUrl" required placeholder="https://github.com/user/repo.git">
-          </div>
-          <div class="form-group">
-            <label>Rama (opcional)</label>
-            <input type="text" v-model="deployForm.branch" placeholder="main">
-          </div>
-          <div class="form-group">
-            <label>Nombre de la carpeta</label>
-            <input type="text" v-model="deployForm.targetPath" placeholder="Se usará el nombre del repositorio">
-          </div>
-          <div class="form-group checkbox">
-            <label>
-              <input type="checkbox" v-model="deployForm.installDeps">
-              Instalar dependencias automáticamente
-            </label>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="btn" @click="showDeployModal = false">Cancelar</button>
-            <button type="submit" class="btn btn-primary" :disabled="deploying">
-              {{ deploying ? '⏳ Clonando...' : '🚀 Desplegar' }}
+        <div class="modal-body">
+          <!-- Deployment Type Tabs -->
+          <div class="deploy-tabs">
+            <button 
+              type="button" 
+              :class="['tab-btn', { active: deployForm.type === 'git' }]"
+              @click="deployForm.type = 'git'"
+            >
+              � Git
+            </button>
+            <button 
+              type="button" 
+              :class="['tab-btn', { active: deployForm.type === 'zip' }]"
+              @click="deployForm.type = 'zip'"
+            >
+              📦 ZIP
             </button>
           </div>
-        </form>
+          
+          <!-- Git Deployment Form -->
+          <form v-if="deployForm.type === 'git'" @submit.prevent="deployApp">
+            <div class="form-group">
+              <label>URL del repositorio Git *</label>
+              <input type="url" v-model="deployForm.repoUrl" required placeholder="https://github.com/user/repo.git">
+            </div>
+            <div class="form-group">
+              <label>Rama (opcional)</label>
+              <input type="text" v-model="deployForm.branch" placeholder="main">
+            </div>
+            <div class="form-group">
+              <label>Nombre de la carpeta</label>
+              <input type="text" v-model="deployForm.targetPath" placeholder="Se usará el nombre del repositorio">
+            </div>
+            <div class="form-group checkbox">
+              <label>
+                <input type="checkbox" v-model="deployForm.installDeps">
+                Instalar dependencias automáticamente
+              </label>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="btn" @click="showDeployModal = false">Cancelar</button>
+              <button type="submit" class="btn btn-primary" :disabled="deploying">
+                {{ deploying ? '⏳ Clonando...' : '🚀 Desplegar' }}
+              </button>
+            </div>
+          </form>
+          
+          <!-- ZIP Deployment Form -->
+          <form v-if="deployForm.type === 'zip'" @submit.prevent="deployZip">
+            <div class="form-group">
+              <label>Archivo ZIP *</label>
+              <input type="file" accept=".zip" @change="handleZipFile" required>
+              <p v-if="deployForm.zipFile" class="file-name">{{ deployForm.zipFile.name }}</p>
+            </div>
+            <div class="form-group">
+              <label>Nombre de la carpeta</label>
+              <input type="text" v-model="deployForm.targetPath" placeholder="Nombre de la carpeta">
+            </div>
+            <div class="form-group checkbox">
+              <label>
+                <input type="checkbox" v-model="deployForm.installDeps">
+                Instalar dependencias automáticamente
+              </label>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="btn" @click="showDeployModal = false">Cancelar</button>
+              <button type="submit" class="btn btn-primary" :disabled="deploying || !deployForm.zipFile">
+                {{ deploying ? '⏳ Extrayendo...' : '📦 Desplegar' }}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
 

@@ -15,9 +15,11 @@ const app = createApp({
 
     // Deploy form
     const deployForm = ref({
+      type: 'git',
       repoUrl: '',
       branch: '',
       targetPath: '',
+      zipFile: null,
       installDeps: true
     });
     const deploying = ref(false);
@@ -107,7 +109,70 @@ const app = createApp({
         if (data.success) {
           showNotification('Aplicación desplegada correctamente', 'success');
           showDeployModal.value = false;
-          deployForm.value = { repoUrl: '', branch: '', targetPath: '', installDeps: true };
+          resetDeployForm();
+          fetchApps();
+        } else {
+          showNotification(data.error || 'Error al desplegar', 'error');
+        }
+      } catch (err) {
+        showNotification('Error al desplegar', 'error');
+      } finally {
+        deploying.value = false;
+      }
+    };
+
+    const resetDeployForm = () => {
+      deployForm.value = {
+        type: 'git',
+        repoUrl: '',
+        branch: '',
+        targetPath: '',
+        zipFile: null,
+        installDeps: true
+      };
+    };
+
+    const handleZipFile = (event) => {
+      const file = event.target.files[0];
+      if (file && file.name.endsWith('.zip')) {
+        deployForm.value.zipFile = file;
+        // Auto-set folder name from ZIP filename (without extension)
+        if (!deployForm.value.targetPath) {
+          const nameWithoutExt = file.name.replace('.zip', '');
+          deployForm.value.targetPath = nameWithoutExt;
+        }
+      } else {
+        showNotification('El archivo debe ser un ZIP', 'error');
+        deployForm.value.zipFile = null;
+      }
+    };
+
+    const deployZip = async () => {
+      if (!deployForm.value.zipFile) {
+        showNotification('Archivo ZIP requerido', 'error');
+        return;
+      }
+
+      deploying.value = true;
+      
+      const formData = new FormData();
+      formData.append('zip', deployForm.value.zipFile);
+      if (deployForm.value.targetPath) {
+        formData.append('targetPath', deployForm.value.targetPath);
+      }
+      formData.append('installDeps', deployForm.value.installDeps);
+      
+      try {
+        const res = await fetch(`${API_BASE}/deploy/zip`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification('Aplicación desplegada correctamente', 'success');
+          showDeployModal.value = false;
+          resetDeployForm();
           fetchApps();
         } else {
           showNotification(data.error || 'Error al desplegar', 'error');
@@ -479,6 +544,11 @@ const app = createApp({
       pollInterval = setInterval(fetchApps, 5000);
     });
 
+    const openDeployModal = () => {
+      resetDeployForm();
+      showDeployModal.value = true;
+    };
+
     return {
       apps,
       searchQuery,
@@ -497,7 +567,10 @@ const app = createApp({
       logs,
       logsContainer,
       runningScripts,
+      openDeployModal,
       deployApp,
+      handleZipFile,
+      deployZip,
       runScript,
       killScript,
       openConfig,
