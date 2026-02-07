@@ -84,6 +84,7 @@
           <div class="tile-actions">
             <button class="btn-icon" @click="openConfig(app)" title="Configurar">⚙️</button>
             <button class="btn-icon" @click="openLogs(app)" title="Logs">📝</button>
+            <button class="btn-icon" @click="openJsonFiles(app)" title="Archivos JSON">📄</button>
           </div>
         </div>
       </div>
@@ -319,6 +320,54 @@
             <div v-for="(log, i) in logs" :key="i" class="log-line" :class="log.type">
               {{ log.data }}
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- JSON Files Modal -->
+    <div class="modal-overlay" v-if="jsonFilesApp">
+      <div class="modal modal-lg">
+        <div class="modal-header">
+          <h3>📄 {{ jsonFilesApp?.name || 'Archivos' }} - JSON</h3>
+          <button class="btn-icon" @click="jsonFilesApp = null">✕</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="!jsonEditorFile" class="json-files-list">
+            <div v-if="loadingJsonFiles" class="loading">Cargando archivos...</div>
+            <div v-else-if="jsonFiles.length === 0" class="empty-text">
+              No se encontraron archivos JSON
+            </div>
+            <div v-else class="files-grid">
+              <div 
+                v-for="file in jsonFiles" 
+                :key="file.path"
+                class="file-item"
+                @click="openJsonEditor(file)"
+              >
+                <span class="file-icon">📄</span>
+                <span class="file-name">{{ file.name }}</span>
+                <span class="file-path">{{ file.path }}</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- JSON Editor -->
+          <div v-else class="json-editor">
+            <div class="editor-header">
+              <button class="btn" @click="jsonEditorFile = null">← Volver</button>
+              <span class="editor-file-name">{{ jsonEditorFile.name }}</span>
+              <button class="btn btn-primary" @click="saveJsonFile" :disabled="jsonSaving">
+                {{ jsonSaving ? '⏳ Guardando...' : '💾 Guardar' }}
+              </button>
+            </div>
+            <textarea 
+              v-model="jsonEditorContent" 
+              class="json-textarea"
+              :class="{ error: jsonEditorError }"
+              placeholder="{ ... }"
+            ></textarea>
+            <p v-if="jsonEditorError" class="error-text">{{ jsonEditorError }}</p>
           </div>
         </div>
       </div>

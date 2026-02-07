@@ -12,6 +12,15 @@ const app = createApp({
     const logsContainer = ref(null);
     const notifications = ref([]);
     const runningScripts = ref(new Set());
+    
+    // JSON Files
+    const jsonFilesApp = ref(null);
+    const jsonFiles = ref([]);
+    const jsonEditorFile = ref(null);
+    const jsonEditorContent = ref('');
+    const jsonEditorError = ref('');
+    const jsonSaving = ref(false);
+    const loadingJsonFiles = ref(false);
 
     // Deploy form
     const deployForm = ref({
@@ -479,6 +488,83 @@ const app = createApp({
       logs.value = [];
     };
 
+    // JSON Files Management
+    const openJsonFiles = async (app) => {
+      jsonFilesApp.value = app;
+      jsonFiles.value = [];
+      jsonEditorFile.value = null;
+      loadingJsonFiles.value = true;
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${app.id}/json-files`);
+        const data = await res.json();
+        if (data.success) {
+          jsonFiles.value = data.data;
+        } else {
+          showNotification(data.error || 'Error cargando archivos', 'error');
+        }
+      } catch (err) {
+        showNotification('Error cargando archivos', 'error');
+      } finally {
+        loadingJsonFiles.value = false;
+      }
+    };
+
+    const openJsonEditor = async (file) => {
+      try {
+        const res = await fetch(`${API_BASE}/apps/${jsonFilesApp.value.id}/json?file=${encodeURIComponent(file.path)}`);
+        const data = await res.json();
+        if (data.success) {
+          jsonEditorFile.value = file;
+          jsonEditorContent.value = data.data.content;
+          jsonEditorError.value = '';
+        } else {
+          showNotification(data.error || 'Error cargando archivo', 'error');
+        }
+      } catch (err) {
+        showNotification('Error cargando archivo', 'error');
+      }
+    };
+
+    const saveJsonFile = async () => {
+      if (!jsonEditorFile.value) return;
+      
+      // Validate JSON
+      try {
+        JSON.parse(jsonEditorContent.value);
+        jsonEditorError.value = '';
+      } catch (e) {
+        jsonEditorError.value = 'JSON inválido: ' + e.message;
+        return;
+      }
+      
+      jsonSaving.value = true;
+      
+      try {
+        const res = await fetch(`${API_BASE}/apps/${jsonFilesApp.value.id}/json`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            file: jsonEditorFile.value.path,
+            content: jsonEditorContent.value
+          })
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          showNotification('Archivo guardado', 'success');
+          // Refresh the file list
+          openJsonFiles(jsonFilesApp.value);
+        } else {
+          showNotification(data.error || 'Error guardando', 'error');
+        }
+      } catch (err) {
+        showNotification('Error guardando archivo', 'error');
+      } finally {
+        jsonSaving.value = false;
+      }
+    };
+
     const connectLogStream = (appId) => {
       const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/apps/${appId}/logs/stream?app=${appId}`;
       console.log('[WS] Connecting to:', wsUrl);
@@ -567,6 +653,9 @@ const app = createApp({
       logs,
       logsContainer,
       runningScripts,
+      jsonFilesApp,
+      jsonFiles,
+      loadingJsonFiles,
       openDeployModal,
       deployApp,
       handleZipFile,
@@ -583,6 +672,14 @@ const app = createApp({
       restoreScript,
       openLogs,
       closeLogs,
+      openJsonFiles,
+      jsonFiles,
+      jsonEditorFile,
+      jsonEditorContent,
+      jsonEditorError,
+      jsonSaving,
+      openJsonEditor,
+      saveJsonFile,
       isRunning,
       isScriptRunning
     };

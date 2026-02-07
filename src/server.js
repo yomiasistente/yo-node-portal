@@ -810,6 +810,127 @@ wss.on('connection', (ws, req) => {
   }
 });
 
+// ============ JSON File Management ============
+
+// List JSON files in app folder
+app.get('/api/apps/:id/json-files', (req, res) => {
+  const { id } = req.params;
+  const appPath = path.join(APPS_PATH, id);
+  
+  if (!fs.existsSync(appPath)) {
+    return res.status(404).json({ success: false, error: 'App not found' });
+  }
+  
+  try {
+    const jsonFiles = [];
+    
+    function scanDir(dir, baseDir) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = path.relative(baseDir, fullPath);
+        
+        // Skip package*.json files
+        if (entry.name.match(/^package.*\.json$/)) continue;
+        
+        if (entry.isFile() && entry.name.endsWith('.json')) {
+          try {
+            const content = fs.readFileSync(fullPath, 'utf8');
+            const parsed = JSON.parse(content);
+            jsonFiles.push({
+              name: entry.name,
+              path: relativePath,
+              size: fs.statSync(fullPath).size,
+              content: content
+            });
+          } catch (e) {
+            // Skip files that can't be parsed as JSON
+          }
+        } else if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+          scanDir(fullPath, baseDir);
+        }
+      }
+    }
+    
+    scanDir(appPath, appPath);
+    
+    res.json({ success: true, data: jsonFiles });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Read specific JSON file
+app.get('/api/apps/:id/json', (req, res) => {
+  const { id } = req.params;
+  const { file } = req.query;
+  
+  if (!file) {
+    return res.status(400).json({ success: false, error: 'File path required' });
+  }
+  
+  const appPath = path.join(APPS_PATH, id);
+  const filePath = path.join(appPath, file);
+  
+  // Security: ensure file is within app folder
+  if (!filePath.startsWith(appPath)) {
+    return res.status(403).json({ success: false, error: 'Invalid file path' });
+  }
+  
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, error: 'File not found' });
+  }
+  
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(content);
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        file, 
+        content,
+        parsed 
+      } 
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Save JSON file
+app.put('/api/apps/:id/json', (req, res) => {
+  const { id } = req.params;
+  const { file, content } = req.body;
+  
+  if (!file || content === undefined) {
+    return res.status(400).json({ success: false, error: 'File path and content required' });
+  }
+  
+  const appPath = path.join(APPS_PATH, id);
+  const filePath = path.join(appPath, file);
+  
+  // Security: ensure file is within app folder
+  if (!filePath.startsWith(appPath)) {
+    return res.status(403).json({ success: false, error: 'Invalid file path' });
+  }
+  
+  // Validate JSON before saving
+  try {
+    JSON.parse(content);
+  } catch (e) {
+    return res.status(400).json({ success: false, error: 'Invalid JSON format' });
+  }
+  
+  try {
+    fs.writeFileSync(filePath, content, 'utf8');
+    res.json({ success: true, data: { file } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Health
 app.get('/api/health', (req, res) => {
   res.json({ success: true, status: 'ok', timestamp: new Date().toISOString() });
